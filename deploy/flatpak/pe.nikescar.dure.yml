@@ -41,4 +41,4 @@ modules:
       - type: file
         path: pe.nikescar.dure.metainfo.xml
       - type: file
-        path: ../../imgs/logo.png
+        path: ../../fastlane/metadata/android/en-US/images/icon.png

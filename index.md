@@ -12,7 +12,7 @@ hero:
       text: GitHub
       link: https://github.com/nikescar/dure
   image:
-    src: /imgs/logo.png
+    src: /fastlane/metadata/android/en-US/images/icon.png
 ---
 
 <!-- | Arch          | Windows        | MacOS         | Linux        | Android        | IOS         |
