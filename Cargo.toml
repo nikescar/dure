@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "mobile",
+    "crates/darkhttpd-sys",
+    "crates/go-webauthn",
+]
+exclude = [
+    "crates/asyncapi-gen",  # Standalone workspace for AsyncAPI generation
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nikescar/dure"
+rust-version = "1.85"
+version = "0.0.1"
+versioncode = "1"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.dev]
+# Fast incremental builds for development
+opt-level = 0
+debug = 2
+lto = false
+incremental = true
+codegen-units = 256
+
+[profile.release]
+lto = true # "fat"
+codegen-units = 1
+opt-level = "z"
+debug = 0
+strip = "symbols"
+panic = "abort"
+
+# Fast development profile - optimized but without slow LTO
+[profile.dev-release]
+inherits = "release"
+lto = false           # Disable LTO for faster builds (saves 50%+ compile time)
+codegen-units = 16    # Parallel code generation
+opt-level = 2         # Good optimization without being too slow
+incremental = true    # Enable incremental compilation
+strip = "symbols"     # Still strip symbols to reduce size
+

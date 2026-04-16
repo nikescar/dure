@@ -1,0 +1,73 @@
+name: dure
+version: 0.0.1
+summary: distributed e-commerce platform for small shop owners.
+description: |
+  Distributed e-commerce client and hosting solution with identity management, store front, and hosting management.
+  Open source, cross-platform, written in Rust.
+
+base: core20
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+  - build-on: armhf
+
+apps:
+  dure:
+    command: bin/dure
+    plugs:
+      - home
+      - network
+
+parts:
+  dure:
+    source: .
+    plugin: rust
+    build-packages:
+      - libssl-dev
+      - pkg-config
+      - gettext
+      - libclang-dev
+      - on arm64,armhf,ppc64el,s390x:
+        - lld
+    override-build: |
+      # Building process already finished in the build step of github actions
+      # so just copy the binary to the snap install directory
+
+      # Set version from git
+      snapcraftctl set-version $(git describe --tags --always 2>/dev/null || echo "0.0.6")
+
+      # Use TARGET_ARCH from environment if set, otherwise fall back to SNAPCRAFT_TARGET_ARCH
+      ARCH="${TARGET_ARCH:-$SNAPCRAFT_TARGET_ARCH}"
+
+      echo "Building for architecture: $ARCH"
+
+      # Determine the Rust target based on architecture
+      case "$ARCH" in
+        amd64)
+          BINARY_PATH="target/release/dure"
+          ;;
+        arm64)
+          BINARY_PATH="target/release/dure"
+          ;;
+        armhf)
+          BINARY_PATH="target/release/dure"
+          ;;
+        *)
+          echo "Unsupported architecture: $ARCH"
+          exit 1
+          ;;
+      esac
+
+      echo "Looking for binary at: $BINARY_PATH"
+      if [ ! -f "$BINARY_PATH" ]; then
+        echo "ERROR: Binary not found at $BINARY_PATH"
+        echo "Directory contents:"
+        find target -name dure 2>/dev/null || echo "No dure binaries found in target/"
+        exit 1
+      fi
+
+      # Install the binary
+      install -Dm755 $BINARY_PATH $SNAPCRAFT_PART_INSTALL/bin/dure
+      echo "Successfully installed binary to $SNAPCRAFT_PART_INSTALL/bin/dure"

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dure</title>
+</head>
+<body>
+    <div class="config-section">
+        <div class="form-group">
+            <label for="vfs">Database Storage Type:</label>
+            <select id="vfs">
+                <option value="0">Memory (Temporary)</option>
+                <option value="1">OPFS Sync Access Handle Pool (Persistent)</option>
+                <option value="2">Indexed DB (Persistent)</option>
+            </select>
+        </div>
+    </div>
+
+    <canvas id="the_canvas_id" style="width:100%;height:80%;"></canvas>
+
+    <script type="module">
+        // Initialize Web Worker for VFS setup
+        const worker = new Worker('worker.js', { type: 'module' });
+
+        worker.onmessage = function(event) {
+            const { cmd, ...data } = event.data;
+            if (cmd === 'error') {
+                console.error('Worker error:', data.error);
+            }
+        };
+
+        document.getElementById('vfs').addEventListener('change', () => {
+            const id = parseInt(document.getElementById('vfs').value);
+            worker.postMessage({ cmd: 'switch_vfs', id });
+        });
+
+        // Load the main WASM app
+        import('./dure.js').then(module => module.default());
+    </script>
+</body>
+</html>

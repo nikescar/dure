@@ -1,0 +1,2 @@
+-- This file should undo anything in `up.sql`
+-- Initial setup has no down migration

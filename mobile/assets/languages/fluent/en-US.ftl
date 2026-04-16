@@ -1,0 +1,282 @@
+app-title = Dure
+app-description = Distributed e-commerce platform for small shop owners.
+settings = Settings
+exit = Exit
+debloat = Debloat
+scan = Scan
+apps = Apps
+usage = Usage
+devices = Devices:
+users = Users:
+select-device = Select device
+all-users = All Users
+refresh = Refresh
+logs = Application Logs:
+theme-mode = Theme Mode:
+contrast-level = Contrast Level:
+log-level = Log Level:
+ok = OK
+stop = Stop
+sort-by = Sort:
+
+# Apps Tab
+app-list = App List:
+select-app-list = Select an app list
+apps-found = ({ $count } apps)
+category = Category
+app-name = App Name
+links = Links
+install = Install
+installed = Installed
+uninstall = Uninstall
+enable = Enable
+disable = Disable
+app-list-info = App List Info
+package-info = Package Info
+refresh-list = Refresh List
+install-success = Installation Successful
+uninstall-success = Uninstallation Successful
+uninstall-confirm-title = Confirm Uninstall
+uninstall-confirm-single = Uninstalling "{ $name }" will delete the app and its data. This action cannot be undone.
+uninstall-confirm-batch = Uninstalling { $count } selected apps will delete them and their data. This action cannot be undone.
+install-error = Installation Error
+check-update = Check for Update
+update-now = Update Now
+checking-update = Checking...
+update-available = Update available:
+up-to-date = Up to date
+update-error = Update check failed
+autoupdate = Auto Update
+autoupdate-desc = Automatically check for updates on startup
+update-available-title = Update Available
+update-available-message = A new version is available:
+release-notes = Release Notes:
+update-android-instruction = Click "Update Now" to open the download page in your browser. After downloading, install the APK to update the app.
+update-desktop-instruction = Click "Update Now" to download and install the update automatically.
+
+# Debloat Tab
+all = All ({ $enabled }/{ $total })
+recommended = Recommended ({ $enabled }/{ $total })
+advanced = Advanced ({ $enabled }/{ $total })
+expert = Expert ({ $enabled }/{ $total })
+unsafe = Unsafe ({ $enabled }/{ $total })
+unknown = Unknown ({ $enabled }/{ $total })
+label-recommended = Recommended
+label-advanced = Advanced
+label-expert = Expert
+label-unsafe = Unsafe
+label-unknown = Unknown
+show-only-enabled = Show only enabled
+hide-system-app = Hide system app
+filter = Filter:
+filter-hint = Search packages...
+show-only-installable = Show only installable
+disable-github-install = Disable GitHub installation
+col-package-name = Package Name
+col-debloat-category = Debloat Category
+col-runtime-permissions = Runtime Permissions
+col-enabled = Enabled
+col-stalkerware = Stalkerware
+col-install-reason = Install Reason
+col-tasks = Tasks
+stalkerware = STALKERWARE
+not-listed = NOT LISTED
+stalkerware-info = This package is identified as stalkerware
+no-packages-loaded = No packages loaded. Please select a device from the dropdown.
+deselect-all = Deselect All
+selected-count = Selected: { $count }
+uninstall-selected = Uninstall Selected ({ $count })
+disable-selected = Disable Selected ({ $count })
+enable-selected = Enable Selected ({ $count })
+
+# Scan Tab
+virustotal-filter = VirusTotal Filter:
+scanning-packages = Scanning packages...
+malicious = Malicious ({ $enabled }/{ $total })
+malicious-ignored = Malicious-Ignored ({ $enabled }/{ $total })
+suspicious = Suspicious ({ $enabled }/{ $total })
+safe = Safe ({ $enabled }/{ $total })
+no-specific-threat = No Specific Threat ({ $enabled }/{ $total })
+not-scanned = Not Scanned ({ $enabled }/{ $total })
+hybrid-analysis-filter = Hybrid-Analysis Filter:
+col-izzy-risk = IzzyRisk
+col-virustotal = VirusTotal
+col-hybrid-analysis = HybridAnalysis
+scan-not-initialized = Not initialized
+scan-not-scanned = Not scanned
+scan-scanning = Scanning... ({ $scanned }/{ $total })
+scan-error = Error
+scan-error-msg = Error: { $message }
+scan-skip = skip
+scan-404 = 404
+scan-malicious = malicious { $count }/{ $total }
+scan-suspicious = suspicious { $count }/{ $total }
+scan-clean = clean { $count }/{ $total }
+scan-no-results = No results
+ha-malicious = malicious
+ha-malicious-score = malicious ({ $score })
+ha-malicious-tags = malicious ({ $tags })
+ha-suspicious = suspicious
+ha-suspicious-score = suspicious ({ $score })
+ha-suspicious-tags = suspicious ({ $tags })
+ha-whitelisted = whitelisted
+ha-whitelisted-score = whitelisted ({ $score })
+ha-whitelisted-tags = whitelisted ({ $tags })
+ha-no-result = no-result
+ha-no-specific-threat = no specific threat
+ha-no-specific-threat-score = no specific threat ({ $score })
+ha-no-specific-threat-tags = no specific threat ({ $tags })
+ha-skipped = skip
+ha-rate-limited = rate limited
+ha-submitted = submitted
+ha-pending = pending ({ $jobid }...)
+ha-pending-analysis = pending analysis
+ha-analysis-error = analysis error
+ha-upload-error = upload error
+ha-404 = 404 Not Found
+ha-file-too-large = File too large: { $size }
+ha-file-too-large-default = File too large (>100 MB)
+ha-pull-failed = Pull failed: File not found
+ha-temp-dir-error = Temp dir error
+ha-wait-hours = { $text } (wait { $hours }h{ $mins }m)
+ha-wait-mins = { $text } (wait { $mins }m)
+ha-wait-less-than-min = { $text } (wait <1m)
+refresh-scan = Re-scan this package
+izzyrisk-calculation = IzzyRisk Calculation:
+calculating-risk-scores = Calculating risk scores...
+
+# Usage Tab
+usage-control = Usage Control
+no-usage-stats = No usage statistics available. Select a device to view usage stats.
+usage-statistics = Usage Statistics:
+
+# Settings
+display-size = Display Size:
+color-mode = Color Mode:
+light-mode = ☀️ Light
+auto-mode = 🌗 Auto
+dark-mode = 🌙 Dark
+contrast = Contrast:
+contrast-high = High
+contrast-medium = Medium
+contrast-normal = Normal
+allow-unsafe-app-remove = Allow unsafe app uninstall/disable
+virustotal-api-key = VirusTotal(4/min) API Key:
+get-api-key = Get API Key
+allow-virustotal-upload = Allow VirusTotal file upload
+virustotal-upload-desc = (Upload files not found in VirusTotal for analysis)
+hybridanalysis-api-key = HybridAnalysis(200/min) API Key:
+allow-hybridanalysis-upload = Allow Hybrid Analysis file upload
+hybridanalysis-upload-desc = (Upload files not found in Hybrid Analysis for scanning)
+hybridanalysis-tag-ignorelist = HybridAnalysis Tag Ignorelist:
+google-play-renderer = Google Play Renderer
+google-play-renderer-desc = (Fetch and display app info from Google Play Store)
+fdroid-renderer = F-Droid Renderer
+fdroid-renderer-desc = (Fetch and display app info from F-Droid for non-system apps)
+apkmirror-renderer = APKMirror Renderer
+apkmirror-renderer-desc = (Fetch and display app info from APKMirror)
+rendering-google-play = Google Play
+rendering-fdroid = F-Droid
+rendering-apkmirror = APKMirror
+apkmirror-email = APKMirror Email:
+email-hint = your@email.com
+apkmirror-name = APKMirror Name:
+name-hint = Your Name (optional)
+apkmirror-auto-upload = APKMirror Auto-Upload
+apkmirror-auto-upload-desc = (Auto-upload APKs when device version is newer than APKMirror)
+invalidate-cache = 404 Invalidate Cache
+invalidate-cache-desc = (Clear cached apps and scan results)
+show-logs = Show Logs:
+show = Show
+cancel = Cancel
+save = Save
+flush = Flush
+
+# Status & Errors
+status-checking-api = Checking API
+status-pulling-file = Pulling file
+status-uploading = Uploading
+error-invalid-package-id = Invalid package ID (less than 2 domain levels)
+error-timeout-rate-limit = Timeout waiting for rate limit
+error-email-not-configured = Email not configured
+error-rate-limit-reached = Rate limit reached (429)
+error-app-not-found = App not found
+
+# GUI Descriptions
+debloat-description = Debloat android applications with Universal Android Debloater list:
+loading-packages = Loading package details...
+batch-uninstall = Batch Uninstall
+uninstalling-packages = Uninstalling packages...
+batch-disable = Batch Disable
+disabling-packages = Disabling packages...
+batch-enable = Batch Enable
+enabling-packages = Enabling packages...
+scan-description = Scan viruses with virustotal and hybridanalysis:
+set-api-keys = Please set virustotal or hybridanalysis apikey in settings.
+apps-description = Lists of Foss applications :
+usage-description = Application Usage :
+language = Language:
+font = Font:
+text-style = Text Style:
+
+# Disclaimer Dialog
+disclaimer-title = ⚠ Warning
+disclaimer-no-user-data = • This app does not operate over user files or any user data.
+disclaimer-uninstall-warning = • Uninstall action will delete app with userdata for the app. Make careful to uninstall app.
+
+close = Close
+
+# About Dialog
+about = About
+about-description = Remove bloat apps selectively, scan installed apps with VirusTotal/HybridAnalysis, and install FOSS apps through Obtainium.
+about-version = Version
+about-website = Website
+about-credits = Credits
+about-reference-projects = Reference Projects
+about-rust-libraries = Rust Libraries
+
+# Clipboard
+clipboard-copy = Copy
+clipboard-paste = Paste
+
+# Tray Menu (Desktop)
+tray-show-app = Show App
+tray-cache-dir = Open Cache Directory
+tray-refresh-stores = Refresh Store Listings
+tray-view-orders = View Recent Orders
+tray-quit = Quit
+
+# Main UI (dure.rs)
+status-fetching-all = Fetching store listings and product data...
+status-fetching-products = Fetching products...
+status-downloading-history = Downloading order history...
+status-loading-page = Loading more products (page { $page })...
+status-loading-details = Loading product details...
+product-title-label = Product: { $title }
+product-price-label = Price: { $price }
+button-add-to-cart = Add to Cart
+button-buy-now = Buy Now
+button-more-info = More Info
+dialog-loading-products = Loading Products
+status-filter = Product Filter
+status-all = All
+status-favorites = Favorites
+status-on-sale = On Sale
+status-new-arrivals = New Arrivals
+switch-favorite = Favorite
+switch-blacklist = Blacklist
+
+# Navigation Tabs (dure.rs)
+tab-platform = Platform
+tab-server = Server
+tab-ssh = SSH
+tab-domains = Domains
+tab-site = Site
+tab-roles = Roles
+tab-members = Members
+tab-channel = Channel
+tab-dm = DM
+tab-products = Products
+tab-orders = Orders
+tab-email = Email
+tab-client = Client

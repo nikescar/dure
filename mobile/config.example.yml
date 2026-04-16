@@ -1,0 +1,98 @@
+# Dure Application Configuration
+# platform | platforms | domain | server
+
+# Platform identification (deprecated, use platforms list below)
+platform:
+  name: "mylaptop"
+
+# Cloud Platforms (GCP, Firebase, Supabase)
+# Manage with: dure platform add/del/init/status
+platforms:
+  # Example GCP (Google Cloud Platform) configuration
+  - name: "my-gcp"
+    platform_type: "gcp"
+    gcp_project_id: ""  # GCP project ID
+    gcp_billing_account: ""  # Billing account ID
+    gcp_region: ""  # Deployment region (e.g., us-central1, asia-northeast3)
+    api_token: ""  # OAuth access token (auto-set by 'dure platform init')
+    service_account_json: ""  # Path to service account JSON file
+
+  # Example Firebase configuration
+  # - name: "my-firebase"
+  #   platform_type: "firebase"
+  #   firebase_project_id: ""  # Firebase project ID
+  #   firebase_api_key: ""  # Firebase Web API key
+  #   api_token: ""  # Firebase service account token
+  #   service_account_json: ""  # Path to service account JSON file
+
+  # Example Supabase configuration
+  # - name: "my-supabase"
+  #   platform_type: "supabase"
+  #   supabase_project_ref: ""  # Project reference ID
+  #   supabase_api_url: ""  # API URL (e.g., https://abc123.supabase.co)
+  #   supabase_anon_key: ""  # Anonymous/public key
+  #   api_token: ""  # Service role key (for admin operations)
+
+# Domain and SSL certificate configuration
+domain:
+  # Primary domain name (will register both example.com and *.example.com)
+  name: "example.com"
+  
+  # DNS provider: "cloudflare", "duckdns", "gcloud", or "porkbun"
+  dns_provider: "cloudflare"
+  
+  # SSL certificate configuration
+  cert:
+    # Email for Let's Encrypt notifications
+    email: "admin@example.com"
+    # Accept Let's Encrypt Terms of Service
+    # https://letsencrypt.org/documents/LE-SA-v1.4-April-3-2024.pdf
+    lego_tos_accepted: true
+    # Certificate paths (auto-updated by 'dure acme issue')
+    cert_path: ""
+    key_path: ""
+    issuer_path: ""
+  
+  # Cloudflare DNS credentials (if dns_provider = "cloudflare")
+  cloudflare:
+    # Option 1: Use API Token (recommended)
+    api_token: "your_cloudflare_api_token_here"
+    # Option 2: Use Email + API Key (legacy)
+    # email: "you@example.com"
+    # api_key: "your_cloudflare_api_key_here"
+  
+  # DuckDNS credentials (if dns_provider = "duckdns")
+  duckdns:
+    token: ""
+  
+  # Google Cloud DNS credentials (if dns_provider = "gcloud")
+  # Option 1: Using service account file only
+  #   GCE_PROJECT + GCE_SERVICE_ACCOUNT_FILE
+  # Option 2: Using default credentials with impersonation
+  #   GCE_PROJECT + GCE_IMPERSONATE_SERVICE_ACCOUNT
+  # Option 3: Using service account file with impersonation
+  #   GCE_PROJECT + GCE_SERVICE_ACCOUNT_FILE + GCE_IMPERSONATE_SERVICE_ACCOUNT
+  gcloud:
+    project: ""  # Required for all options
+    service_account_file: ""  # Optional: path to service account JSON file
+    impersonate_service_account: ""  # Optional: target service account email to impersonate
+  
+  # Porkbun DNS credentials (if dns_provider = "porkbun")
+  porkbun:
+    api_key: ""
+    secret_api_key: ""
+
+# Server hosting configuration
+server:
+  # Enable TLS/SSL for HTTPS and WSS (true = secure, false = plain HTTP/WS for development)
+  use_tls: true
+  
+  # Enable HTTP request/response debug logging (useful for troubleshooting proxies like cloudflared)
+  debug_http: false
+  
+  # Web hosting: "GCE", "VPS", "CLOUDFLARE_PAGES", or "FIREBASE_HOSTING"
+  web_provider: "GCE"
+  web_provider_token: ""
+  # Database: "GCE", "GCP_CLOUDSQL", or "SUPABASE"
+  db_provider: "GCE"
+
