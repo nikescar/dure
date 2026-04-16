@@ -5,10 +5,10 @@ description: Distributed e-commerce client and hosting solution for small shop o
 issue_link: "https://github.com/nikescar/dure/issues"
 edit_path: "https://github.com/nikescar/dure/edit/main/:path"
 lang: en
-site_favicon: './resources/favicon.ico'
+site_favicon: './mobile/favicon.ico'
 site_author: Woojae, Park
 repo_url: 'https://github.com/nikescar/dure'
-site_url: 'https://dure.pages.dev/'
+site_url: 'https://dure.one/'
 
 # 404 page redirection rules - for github site repo, ex. {id}.github.io
 404_subsite_urls:
@@ -41,9 +41,9 @@ exclude:
 include:
   - .well-known
   - index.md
-  - imgs
+  - fastlane
   - README.md
-  - google1fadff23415819bc.html
+  # - google1fadff23415819bc.html
 
 # Theme settings
 theme_upstream: 'https://github.com/nikescar/mdx-sitegen-solidbase'

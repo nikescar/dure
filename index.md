@@ -15,12 +15,12 @@ hero:
     src: /imgs/logo.png
 ---
 
-| Arch          | Windows        | MacOS         | Linux        | Android        | IOS         |
+<!-- | Arch          | Windows        | MacOS         | Linux        | Android        | IOS         |
 |:--------------|:--------------:|:-------------:|:------------:|:--------------:|--------------:|
 | X86_64(AMD64) | [CLI+GUI](https://github.com/nikescar/dure/releases/latest/download/dure.exe) | [CLI+GUI](https://github.com/nikescar/dure/releases/latest/download/dure-x86_64-apple-darwin.tar.gz) | [CLI+GUI](https://github.com/nikescar/dure/releases/latest/download/dure-x86_64-unknown-linux-musl.tar.gz) [SNAP](https://snapcraft.io/dure) | [APK](https://github.com/nikescar/dure/releases/latest/download/dure-all-signed.apk) [Play Store](https://play.google.com/store/apps/details?id=pe.nikescar.dure) | - |
 | AARCH64(ARM64)| - | [CLI+GUI](https://github.com/nikescar/dure/releases/latest/download/dure-aarch64-apple-darwin.tar.gz) | [CLI+GUI](https://github.com/nikescar/dure/releases/latest/download/dure-aarch64-unknown-linux-musl.tar.gz) [SNAP](https://snapcraft.io/dure) | [APK](https://github.com/nikescar/dure/releases/latest/download/dure-all-signed.apk) [Play Store](https://play.google.com/store/apps/details?id=pe.nikescar.dure) | - |
 
-[Latest Release](https://github.com/nikescar/dure/releases)<br/>
+[Latest Release](https://github.com/nikescar/dure/releases)<br/> -->
 
 
 mdx-sitegen-solidbase is made with [solidbase](https://solidbase.dev/) and based on [solidbase-docs](https://github.com/kobaltedev/solidbase/tree/main/docs)
