@@ -4,7 +4,7 @@
 //! in a KeePass database file without using SQLite.
 
 use crate::calc::keyring::{
-    add_key, delete_key, ensure_kdbx_exists, get_default_kdbx_path, get_default_keyfile_path,
+    add_key, delete_key, ensure_kdbx_exists, get_default_kdbx_path, get_default_kpkey_path,
     list_keys,
 };
 use anyhow::{Context, Result};
@@ -47,8 +47,8 @@ pub fn execute_key_save(output_path: Option<String>) -> Result<()> {
     eprintln!();
     eprintln!("⚠ Keep this file secure! It contains your credentials.");
     eprintln!(
-        "  The file is protected by your keyfile: {}",
-        get_default_keyfile_path()?.display()
+        "  The file is protected by your KPKey: {}",
+        get_default_kpkey_path()?.display()
     );
 
     Ok(())
@@ -106,10 +106,10 @@ pub fn execute_key_load(input_path: String) -> Result<()> {
 pub fn execute_key_status() -> Result<()> {
     // Ensure database exists
     let kdbx_path = ensure_kdbx_exists()?;
-    let keyfile_path = get_default_keyfile_path()?;
+    let kpkey_path = get_default_kpkey_path()?;
 
     // List all keys
-    let keys = list_keys(&kdbx_path, Some(&keyfile_path))?;
+    let keys = list_keys(&kdbx_path, Some(&kpkey_path))?;
 
     if keys.is_empty() {
         eprintln!("No keys found in keyring.");
@@ -118,7 +118,7 @@ pub fn execute_key_status() -> Result<()> {
     } else {
         eprintln!("Keyring status:");
         eprintln!("  Database: {}", kdbx_path.display());
-        eprintln!("  Keyfile:  {}", keyfile_path.display());
+        eprintln!("  KPKey:    {}", kpkey_path.display());
         eprintln!();
         eprintln!("Keys ({} total):", keys.len());
         eprintln!();
@@ -157,12 +157,12 @@ pub fn execute_key_add(domain: String, username: String, password: String) -> Re
 
     // Ensure database exists
     let kdbx_path = ensure_kdbx_exists()?;
-    let keyfile_path = get_default_keyfile_path()?;
+    let kpkey_path = get_default_kpkey_path()?;
 
     // Add the key
     add_key(
         &kdbx_path,
-        Some(&keyfile_path),
+        Some(&kpkey_path),
         &domain,
         &username,
         &password,
@@ -190,10 +190,10 @@ pub fn execute_key_del(domain: String) -> Result<()> {
 
     // Ensure database exists
     let kdbx_path = ensure_kdbx_exists()?;
-    let keyfile_path = get_default_keyfile_path()?;
+    let kpkey_path = get_default_kpkey_path()?;
 
     // Delete the key
-    let deleted = delete_key(&kdbx_path, Some(&keyfile_path), &domain)?;
+    let deleted = delete_key(&kdbx_path, Some(&kpkey_path), &domain)?;
 
     if deleted {
         eprintln!();

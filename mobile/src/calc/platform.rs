@@ -110,12 +110,7 @@ pub fn validate_platform_config(platform: &CloudPlatformConfig) -> ValidationRes
     // Platform-specific validation
     match platform.platform_type.as_str() {
         "gcp" => {
-            if platform.gcp_project_id.is_none() {
-                warnings.push("GCP project ID not set".to_string());
-            }
-            if platform.gcp_region.is_none() {
-                warnings.push("GCP region not set".to_string());
-            }
+            // GCP-specific fields are now stored in VMs, not at platform level
         }
         "firebase" => {
             if platform.firebase_project_id.is_none() {

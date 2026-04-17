@@ -23,13 +23,22 @@ use std::net::{TcpListener, TcpStream};
 
 /// Required GCP OAuth scopes (from Outline-apps)
 const GCP_SCOPES: &[&str] = &[
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/compute",
-    "https://www.googleapis.com/auth/cloudplatformprojects",
-    "https://www.googleapis.com/auth/cloud-billing",
-    "https://www.googleapis.com/auth/service.management",
-    "https://www.googleapis.com/auth/cloud-platform.read-only",
+    "https://www.googleapis.com/auth/userinfo.email",           // ✅ Safe - just email
+    "https://www.googleapis.com/auth/compute",                  // https://developers.google.com/identity/protocols/oauth2/scopes?text=cloudplatformprojects#compute
+    "https://www.googleapis.com/auth/cloudplatformprojects",    // https://docs.cloud.google.com/resource-manager/reference/rest/v3/projects/list
+    "https://www.googleapis.com/auth/cloud-billing",            // https://developers.google.com/identity/protocols/oauth2/scopes?text=cloudplatformprojects#cloudbilling
+    "https://www.googleapis.com/auth/service.management",       // https://developers.google.com/identity/protocols/oauth2/scopes?text=cloudplatformprojects#servicemanagement
+    "https://www.googleapis.com/auth/cloud-platform.read-only", // 🟡 BROAD - read everything
+    "https://www.googleapis.com/auth/ndev.clouddns.readwrite",  // ✅ NEEDED - DNS management
 ];
+
+// Note: For native apps, the "client secret" is not actually a secret.
+// See https://developers.google.com/identity/protocols/oauth2/native-app
+// These credentials are embedded at compile-time from environment variables.
+// Development: Load from .env file via build.rs
+// CI/CD: Load from GitHub Secrets via build.rs
+const OAUTH_CLIENT_ID: &str = env!("GOOGLE_OAUTH_CLIENT_ID");
+const OAUTH_CLIENT_SECRET: &str = env!("GOOGLE_OAUTH_CLIENT_SECRET");
 
 /// OAuth result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,15 +55,38 @@ pub struct OAuthHandler {
 }
 
 impl OAuthHandler {
-    /// Create new OAuth handler
+    /// Create new OAuth handler with embedded credentials
     ///
-    /// Client ID and secret should come from GCP Console:
-    /// https://console.cloud.google.com/apis/credentials
+    /// Uses credentials compiled into the binary at build time.
+    /// Credentials come from:
+    /// - Development: .env file (via build.rs)
+    /// - CI/CD: GitHub Secrets (via build.rs)
+    pub fn default() -> Self {
+        Self {
+            client_id: OAUTH_CLIENT_ID.to_string(),
+            client_secret: OAUTH_CLIENT_SECRET.to_string(),
+        }
+    }
+
+    /// Create new OAuth handler with custom credentials
+    ///
+    /// For advanced users who want to use their own OAuth client.
+    /// Most users should use `OAuthHandler::default()` instead.
     pub fn new(client_id: String, client_secret: String) -> Self {
         Self {
             client_id,
             client_secret,
         }
+    }
+
+    /// Get client ID
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    /// Get client secret
+    pub fn client_secret(&self) -> &str {
+        &self.client_secret
     }
 
     /// Run complete OAuth flow (blocking)

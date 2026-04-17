@@ -8,6 +8,10 @@ use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::api::ns_duckdns::DuckDnsClient;
+use crate::api::ns_porkbun::PorkbunClient;
+use crate::api::ns_cloudflare::CloudflareClient;
+
 /// Certificate information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Certificate {
@@ -504,16 +508,120 @@ impl DnsProviderType {
 /// # Ok(())
 /// # }
 /// ```
-pub fn set_a_record(provider: &DnsProvider, domain: &str, ip: &str) -> Result<()> {
+pub fn set_a_record(provider: &DnsProvider, domain: &str, subdomain: &str, ip: &str) -> Result<()> {
     match provider.provider_type {
-        DnsProviderType::Cloudflare => set_cloudflare_a_record(&provider.api_token, domain, ip),
-        DnsProviderType::GoogleCloud => {
-            // TODO: Implement Google Cloud DNS API
-            // Reference: https://github.com/googleapis/google-cloud-rust/blob/main/tests/dns/src/lib.rs
-            anyhow::bail!("Google Cloud DNS not yet implemented")
-        }
+        DnsProviderType::Cloudflare => set_cloudflare_a_record(&provider.api_token, domain, subdomain, ip),
+        DnsProviderType::GoogleCloud => set_gcp_a_record(&provider.api_token, domain, subdomain, ip),
         DnsProviderType::DuckDNS => set_duckdns_a_record(&provider.api_token, domain, ip),
-        DnsProviderType::Porkbun => set_porkbun_a_record(&provider.api_token, domain, ip),
+        DnsProviderType::Porkbun => set_porkbun_a_record(&provider.api_token, domain, subdomain, ip),
+    }
+}
+
+/// Set AAAA record (IPv6) for a domain
+pub fn set_aaaa_record(provider: &DnsProvider, domain: &str, subdomain: &str, ipv6: &str) -> Result<()> {
+    match provider.provider_type {
+        DnsProviderType::Cloudflare => {
+            set_cloudflare_aaaa_record(&provider.api_token, domain, subdomain, ipv6)
+        }
+        DnsProviderType::GoogleCloud => set_gcp_aaaa_record(&provider.api_token, domain, subdomain, ipv6),
+        DnsProviderType::DuckDNS => set_duckdns_aaaa_record(&provider.api_token, domain, ipv6),
+        DnsProviderType::Porkbun => set_porkbun_aaaa_record(&provider.api_token, domain, subdomain, ipv6),
+    }
+}
+
+/// Delete DNS record from provider
+pub fn delete_dns_record(provider: &DnsProvider, domain: &str, subdomain: &str, record_type: &str) -> Result<()> {
+    match provider.provider_type {
+        DnsProviderType::Cloudflare => {
+            delete_cloudflare_record(&provider.api_token, domain, subdomain, record_type)
+        }
+        DnsProviderType::GoogleCloud => delete_gcp_record(&provider.api_token, domain, subdomain, record_type),
+        DnsProviderType::DuckDNS => {
+            anyhow::bail!("DuckDNS record deletion not supported (records expire automatically)")
+        }
+        DnsProviderType::Porkbun => delete_porkbun_record(&provider.api_token, domain, subdomain, record_type),
+    }
+}
+
+fn delete_cloudflare_record(api_token: &str, domain: &str, record_name: &str, record_type: &str) -> Result<()> {
+    eprintln!("DEBUG: Deleting Cloudflare record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name (from config): {}", record_name);
+    eprintln!("  Type: {}", record_type);
+    eprintln!("  API Token: {}...", &api_token.chars().take(8).collect::<String>());
+
+    let client = CloudflareClient::new(api_token.to_string());
+
+    // Find zone ID
+    eprintln!("  Calling Cloudflare API to find zone...");
+    let zone = match client.find_zone_by_domain(domain) {
+        Ok(Some(z)) => {
+            eprintln!("  ✓ Found zone: {} ({})", z.name, z.id);
+            z
+        }
+        Ok(None) => {
+            eprintln!("  ❌ Zone not found for domain: {}", domain);
+            anyhow::bail!("Zone not found for domain: {}", domain)
+        }
+        Err(e) => {
+            eprintln!("  ❌ Error finding zone: {}", e);
+            return Err(e);
+        }
+    };
+
+    // record_name is already full FQDN from config (e.g., "test.dure.app")
+    // Use it directly for searching
+    let full_name = record_name.to_string();
+
+    eprintln!("  Searching with full name: '{}'", full_name);
+
+    eprintln!("  Searching for record with name='{}' type='{}'", full_name, record_type);
+    eprintln!("  Calling Cloudflare API to find record...");
+
+    // Find the record
+    match client.find_record(&zone.id, &full_name, record_type) {
+        Ok(Some(record)) => {
+            eprintln!("  ✓ Found record:");
+            eprintln!("    ID: {}", record.id);
+            eprintln!("    Name: {}", record.name);
+            eprintln!("    Type: {}", record.record_type);
+            eprintln!("    Content: {}", record.content);
+            eprintln!("  Calling Cloudflare API to delete record...");
+
+            match client.delete_record(&zone.id, &record.id) {
+                Ok(_) => {
+                    eprintln!("  ✓ Successfully deleted record");
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("  ❌ Error deleting record: {}", e);
+                    Err(e)
+                }
+            }
+        }
+        Ok(None) => {
+            eprintln!("  ❌ Record not found");
+            eprintln!("  Getting all records for zone to debug...");
+
+            match client.get_records(&zone.id) {
+                Ok(records) => {
+                    eprintln!("  All records in zone:");
+                    for rec in &records {
+                        eprintln!("    - {} ({}) -> {}", rec.name, rec.record_type, rec.content);
+                    }
+                    eprintln!("  Total records: {}", records.len());
+                }
+                Err(e) => {
+                    eprintln!("  ❌ Error listing records: {}", e);
+                }
+            }
+
+            anyhow::bail!("Record not found: {} ({})", full_name, record_type)
+        }
+        Err(e) => {
+            eprintln!("  ❌ Error finding record: {}", e);
+            Err(e)
+        }
     }
 }
 
@@ -536,87 +644,518 @@ pub fn set_a_record(provider: &DnsProvider, domain: &str, ip: &str) -> Result<()
 /// # Ok(())
 /// # }
 /// ```
-pub fn set_txt_record(provider: &DnsProvider, domain: &str, txt_value: &str) -> Result<()> {
+pub fn set_txt_record(provider: &DnsProvider, domain: &str, subdomain: &str, txt_value: &str) -> Result<()> {
     match provider.provider_type {
         DnsProviderType::Cloudflare => {
-            set_cloudflare_txt_record(&provider.api_token, domain, txt_value)
+            set_cloudflare_txt_record(&provider.api_token, domain, subdomain, txt_value)
         }
-        DnsProviderType::GoogleCloud => {
-            // TODO: Implement Google Cloud DNS API
-            anyhow::bail!("Google Cloud DNS not yet implemented")
-        }
+        DnsProviderType::GoogleCloud => set_gcp_txt_record(&provider.api_token, domain, subdomain, txt_value),
         DnsProviderType::DuckDNS => set_duckdns_txt_record(&provider.api_token, domain, txt_value),
-        DnsProviderType::Porkbun => set_porkbun_txt_record(&provider.api_token, domain, txt_value),
+        DnsProviderType::Porkbun => set_porkbun_txt_record(&provider.api_token, domain, subdomain, txt_value),
     }
 }
 
+
 // Cloudflare DNS API implementations
-fn set_cloudflare_a_record(_api_token: &str, domain: &str, ip: &str) -> Result<()> {
-    // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_cf.sh
-    // TODO: Implement Cloudflare API call using ureq
-    // Steps:
-    // 1. Get zone ID for domain
-    // 2. Create or update A record
-    eprintln!("Setting Cloudflare A record: {} -> {}", domain, ip);
-    eprintln!(
-        "API Token: {}...",
-        &_api_token.chars().take(8).collect::<String>()
-    );
-    // Implementation placeholder
-    anyhow::bail!("Cloudflare A record API not yet implemented")
+fn set_cloudflare_a_record(api_token: &str, domain: &str, record_name: &str, ip: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting Cloudflare A record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  IP: {}", ip);
+    eprintln!("  API Token: {}...", &api_token.chars().take(8).collect::<String>());
+
+    let client = CloudflareClient::new(api_token.to_string());
+
+    // Find zone ID
+    let zone = client.find_zone_by_domain(domain)?
+        .ok_or_else(|| anyhow::anyhow!("Zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // record_name is already full FQDN from config (e.g., "test.dure.app")
+    // Use it directly
+    let record_name = record_name.to_string();
+
+    eprintln!("  Record name: {}", record_name);
+
+    // Check if record exists
+    match client.find_record(&zone.id, &record_name, "A")? {
+        Some(existing) => {
+            eprintln!("  Updating existing record (ID: {})", existing.id);
+            client.update_record(&zone.id, &existing.id, &record_name, "A", ip, None, None)?;
+            eprintln!("  ✓ Updated A record");
+        }
+        None => {
+            eprintln!("  Creating new record");
+            client.create_record(&zone.id, &record_name, "A", ip, None, None)?;
+            eprintln!("  ✓ Created A record");
+        }
+    }
+
+    Ok(())
 }
 
-fn set_cloudflare_txt_record(_api_token: &str, domain: &str, txt_value: &str) -> Result<()> {
-    // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_cf.sh
-    eprintln!("Setting Cloudflare TXT record: {} -> {}", domain, txt_value);
-    eprintln!(
-        "API Token: {}...",
-        &_api_token.chars().take(8).collect::<String>()
-    );
-    // Implementation placeholder
-    anyhow::bail!("Cloudflare TXT record API not yet implemented")
+fn set_cloudflare_txt_record(api_token: &str, domain: &str, record_name: &str, txt_value: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting Cloudflare TXT record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  TXT Value: {}", txt_value);
+    eprintln!("  API Token: {}...", &api_token.chars().take(8).collect::<String>());
+
+    let client = CloudflareClient::new(api_token.to_string());
+
+    // Find zone ID
+    let zone = client.find_zone_by_domain(domain)?
+        .ok_or_else(|| anyhow::anyhow!("Zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // record_name is already full FQDN from config (e.g., "test.dure.app")
+    // Use it directly
+    let record_name = record_name.to_string();
+
+    eprintln!("  Record name: {}", record_name);
+
+    // Check if record exists
+    match client.find_record(&zone.id, &record_name, "TXT")? {
+        Some(existing) => {
+            eprintln!("  Updating existing record (ID: {})", existing.id);
+            client.update_record(&zone.id, &existing.id, &record_name, "TXT", txt_value, None, None)?;
+            eprintln!("  ✓ Updated TXT record");
+        }
+        None => {
+            eprintln!("  Creating new record");
+            client.create_record(&zone.id, &record_name, "TXT", txt_value, None, None)?;
+            eprintln!("  ✓ Created TXT record");
+        }
+    }
+
+    Ok(())
+}
+
+fn set_cloudflare_aaaa_record(api_token: &str, domain: &str, record_name: &str, ipv6: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting Cloudflare AAAA record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  IPv6: {}", ipv6);
+    eprintln!("  API Token: {}...", &api_token.chars().take(8).collect::<String>());
+
+    let client = CloudflareClient::new(api_token.to_string());
+
+    // Find zone ID
+    let zone = client.find_zone_by_domain(domain)?
+        .ok_or_else(|| anyhow::anyhow!("Zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // record_name is already full FQDN from config (e.g., "test.dure.app")
+    // Use it directly
+    let record_name = record_name.to_string();
+
+    eprintln!("  Record name: {}", record_name);
+
+    // Check if record exists
+    match client.find_record(&zone.id, &record_name, "AAAA")? {
+        Some(existing) => {
+            eprintln!("  Updating existing record (ID: {})", existing.id);
+            client.update_record(&zone.id, &existing.id, &record_name, "AAAA", ipv6, None, None)?;
+            eprintln!("  ✓ Updated AAAA record");
+        }
+        None => {
+            eprintln!("  Creating new record");
+            client.create_record(&zone.id, &record_name, "AAAA", ipv6, None, None)?;
+            eprintln!("  ✓ Created AAAA record");
+        }
+    }
+
+    Ok(())
 }
 
 // DuckDNS API implementations
-fn set_duckdns_a_record(_token: &str, domain: &str, ip: &str) -> Result<()> {
+fn set_duckdns_a_record(token: &str, domain: &str, ip: &str) -> Result<()> {
     // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_duckdns.sh
     // DuckDNS API: https://www.duckdns.org/update?domains={domain}&token={token}&ip={ip}
     eprintln!("Setting DuckDNS A record: {} -> {}", domain, ip);
-    eprintln!("Token: {}...", &_token.chars().take(8).collect::<String>());
-    // Implementation placeholder
-    anyhow::bail!("DuckDNS A record API not yet implemented")
+    eprintln!("Token: {}...", &token.chars().take(8).collect::<String>());
+
+    let client = DuckDnsClient::new(token.to_string());
+    client.update_a_record(domain, ip)
+        .context("Failed to update DuckDNS A record")
 }
 
-fn set_duckdns_txt_record(_token: &str, domain: &str, txt_value: &str) -> Result<()> {
+fn set_duckdns_txt_record(token: &str, domain: &str, txt_value: &str) -> Result<()> {
     // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_duckdns.sh
     eprintln!("Setting DuckDNS TXT record: {} -> {}", domain, txt_value);
-    eprintln!("Token: {}...", &_token.chars().take(8).collect::<String>());
-    // Implementation placeholder
-    anyhow::bail!("DuckDNS TXT record API not yet implemented")
+    eprintln!("Token: {}...", &token.chars().take(8).collect::<String>());
+
+    let client = DuckDnsClient::new(token.to_string());
+    client.update_txt_record(domain, txt_value)
+        .context("Failed to update DuckDNS TXT record")
+}
+
+fn set_duckdns_aaaa_record(token: &str, domain: &str, ipv6: &str) -> Result<()> {
+    // Reference: https://www.duckdns.org/spec.jsp
+    // DuckDNS API: https://www.duckdns.org/update?domains={domain}&token={token}&ipv6={ipv6}
+    eprintln!("Setting DuckDNS AAAA record: {} -> {}", domain, ipv6);
+    eprintln!("Token: {}...", &token.chars().take(8).collect::<String>());
+
+    let client = DuckDnsClient::new(token.to_string());
+    client.update_aaaa_record(domain, ipv6)
+        .context("Failed to update DuckDNS AAAA record")
 }
 
 // Porkbun API implementations
-fn set_porkbun_a_record(_api_token: &str, domain: &str, ip: &str) -> Result<()> {
+fn set_porkbun_a_record(api_token: &str, domain: &str, subdomain: &str, ip: &str) -> Result<()> {
     // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_porkbun.sh
     // Porkbun API: https://porkbun.com/api/json/v3/dns/create/{domain}
-    eprintln!("Setting Porkbun A record: {} -> {}", domain, ip);
-    eprintln!(
-        "API Token: {}...",
-        &_api_token.chars().take(8).collect::<String>()
-    );
-    // Implementation placeholder
-    anyhow::bail!("Porkbun A record API not yet implemented")
+    eprintln!("DEBUG: Setting Porkbun A record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Subdomain (input): {}", subdomain);
+    eprintln!("  IP: {}", ip);
+
+    // Parse credentials from "apikey::secretkey" format
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid Porkbun credentials format. Expected 'apikey::secretkey'");
+    }
+    let (api_key, secret_key) = (parts[0], parts[1]);
+
+    eprintln!("  API Key: {}...", &api_key.chars().take(8).collect::<String>());
+
+    // Convert @ to empty string for root domain (Porkbun expects empty, not @)
+    let porkbun_subdomain = if subdomain == "@" || subdomain == domain {
+        ""
+    } else {
+        subdomain
+    };
+
+    eprintln!("  Subdomain (for API): '{}'", porkbun_subdomain);
+
+    let client = PorkbunClient::new(api_key.to_string(), secret_key.to_string());
+
+    // For Porkbun: domain in URL, subdomain in body
+    eprintln!("  Creating record via Porkbun API...");
+    eprintln!("    URL: /dns/create/{}", domain);
+    eprintln!("    Body: subdomain='{}', type='A', content='{}', ttl=600", porkbun_subdomain, ip);
+
+    client.create_record(domain, porkbun_subdomain, "A", ip, Some(600))
+        .context("Failed to create Porkbun A record")
 }
 
-fn set_porkbun_txt_record(_api_token: &str, domain: &str, txt_value: &str) -> Result<()> {
+fn set_porkbun_txt_record(api_token: &str, domain: &str, subdomain: &str, txt_value: &str) -> Result<()> {
     // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_porkbun.sh
-    eprintln!("Setting Porkbun TXT record: {} -> {}", domain, txt_value);
-    eprintln!(
-        "API Token: {}...",
-        &_api_token.chars().take(8).collect::<String>()
-    );
-    // Implementation placeholder
-    anyhow::bail!("Porkbun TXT record API not yet implemented")
+    eprintln!("DEBUG: Setting Porkbun TXT record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Subdomain (input): {}", subdomain);
+    eprintln!("  TXT Value: {}", txt_value);
+
+    // Parse credentials from "apikey::secretkey" format
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid Porkbun credentials format. Expected 'apikey::secretkey'");
+    }
+    let (api_key, secret_key) = (parts[0], parts[1]);
+
+    eprintln!("  API Key: {}...", &api_key.chars().take(8).collect::<String>());
+
+    // Convert @ to empty string for root domain (Porkbun expects empty, not @)
+    let porkbun_subdomain = if subdomain == "@" || subdomain == domain {
+        ""
+    } else {
+        subdomain
+    };
+
+    eprintln!("  Subdomain (for API): '{}'", porkbun_subdomain);
+
+    let client = PorkbunClient::new(api_key.to_string(), secret_key.to_string());
+
+    // For Porkbun: domain in URL, subdomain in body
+    eprintln!("  Creating record via Porkbun API...");
+    eprintln!("    URL: /dns/create/{}", domain);
+    eprintln!("    Body: subdomain='{}', type='TXT', content='{}', ttl=600", porkbun_subdomain, txt_value);
+
+    client.create_record(domain, porkbun_subdomain, "TXT", txt_value, Some(600))
+        .context("Failed to create Porkbun TXT record")
+}
+
+fn set_porkbun_aaaa_record(api_token: &str, domain: &str, subdomain: &str, ipv6: &str) -> Result<()> {
+    // Reference: https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_porkbun.sh
+    eprintln!("DEBUG: Setting Porkbun AAAA record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Subdomain (input): {}", subdomain);
+    eprintln!("  IPv6: {}", ipv6);
+
+    // Parse credentials from "apikey::secretkey" format
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid Porkbun credentials format. Expected 'apikey::secretkey'");
+    }
+    let (api_key, secret_key) = (parts[0], parts[1]);
+
+    eprintln!("  API Key: {}...", &api_key.chars().take(8).collect::<String>());
+
+    // Convert @ to empty string for root domain (Porkbun expects empty, not @)
+    let porkbun_subdomain = if subdomain == "@" || subdomain == domain {
+        ""
+    } else {
+        subdomain
+    };
+
+    eprintln!("  Subdomain (for API): '{}'", porkbun_subdomain);
+
+    let client = PorkbunClient::new(api_key.to_string(), secret_key.to_string());
+
+    // For Porkbun: domain in URL, subdomain in body
+    eprintln!("  Creating record via Porkbun API...");
+    eprintln!("    URL: /dns/create/{}", domain);
+    eprintln!("    Body: subdomain='{}', type='AAAA', content='{}', ttl=600", porkbun_subdomain, ipv6);
+
+    client.create_record(domain, porkbun_subdomain, "AAAA", ipv6, Some(600))
+        .context("Failed to create Porkbun AAAA record")
+}
+
+fn delete_porkbun_record(api_token: &str, domain: &str, record_name: &str, record_type: &str) -> Result<()> {
+    eprintln!("DEBUG: Deleting Porkbun record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  Type: {}", record_type);
+
+    // Extract subdomain portion from full record name
+    // Porkbun API expects: subdomain portion only, omit or empty for root
+    let subdomain = if record_name == domain {
+        // Root domain record
+        ""
+    } else if let Some(prefix) = record_name.strip_suffix(&format!(".{}", domain)) {
+        // Subdomain record like "test.getonthe.top" -> "test"
+        prefix
+    } else if record_name.ends_with(domain) && record_name.len() > domain.len() {
+        // Handle case where name is like "testgetonthe.top" (no dot)
+        &record_name[..record_name.len() - domain.len() - 1]
+    } else {
+        // Fallback: use the name as-is
+        record_name
+    };
+
+    eprintln!("  Extracted subdomain: '{}'", subdomain);
+
+    // Parse credentials from "apikey::secretkey" format
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid Porkbun credentials format. Expected 'apikey::secretkey'");
+    }
+    let (api_key, secret_key) = (parts[0], parts[1]);
+
+    eprintln!("  API Key: {}...", &api_key.chars().take(8).collect::<String>());
+
+    let client = PorkbunClient::new(api_key.to_string(), secret_key.to_string());
+
+    eprintln!("  Calling Porkbun delete API...");
+    eprintln!("    URL: /dns/deleteByNameType/{}/{}/{}", domain, record_type, subdomain);
+
+    client.delete_record(domain, subdomain, record_type)
+        .context("Failed to delete Porkbun record")
+}
+
+// Google Cloud DNS API implementations
+fn set_gcp_a_record(api_token: &str, domain: &str, record_name: &str, ip: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting GCP A record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  IP: {}", ip);
+
+    // Parse token format: "access_token::project_id"
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid GCP token format. Expected 'access_token::project_id'");
+    }
+    let (access_token, project_id) = (parts[0], parts[1]);
+
+    use crate::api::ns_gcp::GcpDnsClient;
+    let client = GcpDnsClient::new(access_token.to_string());
+
+    // Find managed zone for this domain
+    let zone = client.find_zone_by_domain(project_id, domain)?
+        .ok_or_else(|| anyhow::anyhow!("Managed zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // Construct FQDN based on record name
+    let fqdn = if record_name.ends_with('.') {
+        record_name.to_string()
+    } else if record_name.is_empty() || record_name == "@" {
+        format!("{}.", domain)  // Root domain
+    } else {
+        format!("{}.{}.", record_name, domain)  // Subdomain
+    };
+
+    eprintln!("  FQDN: {}", fqdn);
+
+    // Try to fetch existing record
+    let existing_rrsets = client.list_rrsets(project_id, &zone.name)?;
+    let existing = existing_rrsets.iter()
+        .find(|r| r.name == fqdn && r.record_type == "A");
+
+    if let Some(_existing) = existing {
+        eprintln!("  Updating existing A record");
+        client.update_rrset(project_id, &zone.name, &fqdn, "A", 300, vec![ip.to_string()])?;
+        eprintln!("  ✓ Updated A record");
+    } else {
+        eprintln!("  Creating new A record");
+        client.create_rrset(project_id, &zone.name, &fqdn, "A", 300, vec![ip.to_string()])?;
+        eprintln!("  ✓ Created A record");
+    }
+
+    Ok(())
+}
+
+fn set_gcp_aaaa_record(api_token: &str, domain: &str, record_name: &str, ipv6: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting GCP AAAA record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  IPv6: {}", ipv6);
+
+    // Parse token format: "access_token::project_id"
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid GCP token format. Expected 'access_token::project_id'");
+    }
+    let (access_token, project_id) = (parts[0], parts[1]);
+
+    use crate::api::ns_gcp::GcpDnsClient;
+    let client = GcpDnsClient::new(access_token.to_string());
+
+    // Find managed zone for this domain
+    let zone = client.find_zone_by_domain(project_id, domain)?
+        .ok_or_else(|| anyhow::anyhow!("Managed zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // Construct FQDN based on record name
+    let fqdn = if record_name.ends_with('.') {
+        record_name.to_string()
+    } else if record_name.is_empty() || record_name == "@" {
+        format!("{}.", domain)  // Root domain
+    } else {
+        format!("{}.{}.", record_name, domain)  // Subdomain
+    };
+
+    eprintln!("  FQDN: {}", fqdn);
+
+    // Try to fetch existing record
+    let existing_rrsets = client.list_rrsets(project_id, &zone.name)?;
+    let existing = existing_rrsets.iter()
+        .find(|r| r.name == fqdn && r.record_type == "AAAA");
+
+    if let Some(_existing) = existing {
+        eprintln!("  Updating existing AAAA record");
+        client.update_rrset(project_id, &zone.name, &fqdn, "AAAA", 300, vec![ipv6.to_string()])?;
+        eprintln!("  ✓ Updated AAAA record");
+    } else {
+        eprintln!("  Creating new AAAA record");
+        client.create_rrset(project_id, &zone.name, &fqdn, "AAAA", 300, vec![ipv6.to_string()])?;
+        eprintln!("  ✓ Created AAAA record");
+    }
+
+    Ok(())
+}
+
+fn set_gcp_txt_record(api_token: &str, domain: &str, record_name: &str, txt_value: &str) -> Result<()> {
+    eprintln!("DEBUG: Setting GCP TXT record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  TXT Value: {}", txt_value);
+
+    // Parse token format: "access_token::project_id"
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid GCP token format. Expected 'access_token::project_id'");
+    }
+    let (access_token, project_id) = (parts[0], parts[1]);
+
+    use crate::api::ns_gcp::GcpDnsClient;
+    let client = GcpDnsClient::new(access_token.to_string());
+
+    // Find managed zone for this domain
+    let zone = client.find_zone_by_domain(project_id, domain)?
+        .ok_or_else(|| anyhow::anyhow!("Managed zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // Construct FQDN based on record name
+    let fqdn = if record_name.ends_with('.') {
+        record_name.to_string()
+    } else if record_name.is_empty() || record_name == "@" {
+        format!("{}.", domain)  // Root domain
+    } else {
+        format!("{}.{}.", record_name, domain)  // Subdomain
+    };
+
+    eprintln!("  FQDN: {}", fqdn);
+
+    // GCP TXT records need to be quoted
+    let quoted_txt = if txt_value.starts_with('"') && txt_value.ends_with('"') {
+        txt_value.to_string()
+    } else {
+        format!("\"{}\"", txt_value)
+    };
+
+    // Try to fetch existing record
+    let existing_rrsets = client.list_rrsets(project_id, &zone.name)?;
+    let existing = existing_rrsets.iter()
+        .find(|r| r.name == fqdn && r.record_type == "TXT");
+
+    if let Some(_existing) = existing {
+        eprintln!("  Updating existing TXT record");
+        client.update_rrset(project_id, &zone.name, &fqdn, "TXT", 300, vec![quoted_txt])?;
+        eprintln!("  ✓ Updated TXT record");
+    } else {
+        eprintln!("  Creating new TXT record");
+        client.create_rrset(project_id, &zone.name, &fqdn, "TXT", 300, vec![quoted_txt])?;
+        eprintln!("  ✓ Created TXT record");
+    }
+
+    Ok(())
+}
+
+fn delete_gcp_record(api_token: &str, domain: &str, record_name: &str, record_type: &str) -> Result<()> {
+    eprintln!("DEBUG: Deleting GCP record");
+    eprintln!("  Domain: {}", domain);
+    eprintln!("  Record name: {}", record_name);
+    eprintln!("  Type: {}", record_type);
+
+    // Parse token format: "access_token::project_id"
+    let parts: Vec<&str> = api_token.split("::").collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid GCP token format. Expected 'access_token::project_id'");
+    }
+    let (access_token, project_id) = (parts[0], parts[1]);
+
+    use crate::api::ns_gcp::GcpDnsClient;
+    let client = GcpDnsClient::new(access_token.to_string());
+
+    // Find managed zone for this domain
+    let zone = client.find_zone_by_domain(project_id, domain)?
+        .ok_or_else(|| anyhow::anyhow!("Managed zone not found for domain: {}", domain))?;
+
+    eprintln!("  Found zone: {} ({})", zone.name, zone.id);
+
+    // Construct FQDN based on record name
+    let fqdn = if record_name.ends_with('.') {
+        record_name.to_string()
+    } else if record_name.is_empty() || record_name == "@" {
+        format!("{}.", domain)  // Root domain
+    } else {
+        format!("{}.{}.", record_name, domain)  // Subdomain
+    };
+
+    eprintln!("  FQDN: {}", fqdn);
+    eprintln!("  Calling GCP delete API...");
+
+    client.delete_rrset(project_id, &zone.name, &fqdn, record_type)
+        .context("Failed to delete GCP record")?;
+
+    eprintln!("  ✓ Deleted {} record", record_type);
+    Ok(())
 }
 
 // TODO: Public key generation placeholder

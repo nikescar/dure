@@ -7,3 +7,16 @@ pub mod desktop;
 
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod gcp_oauth;
+
+// Nameserver API modules
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub mod ns_cloudflare;
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub mod ns_duckdns;
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub mod ns_gcp;
+
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+pub mod ns_porkbun;

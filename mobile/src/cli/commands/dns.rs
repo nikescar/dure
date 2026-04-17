@@ -12,8 +12,8 @@ pub fn execute_dns(record_type_str: &str, domain: &str) -> Result<()> {
         "a" => RecordType::A,
         "aaaa" => RecordType::AAAA,
         "txt" => RecordType::TXT,
-        "sshfp" => RecordType::SSHFP,
-        _ => anyhow::bail!("Invalid record type. Use: a, aaaa, sshfp, or txt"),
+        "ns" => RecordType::NS,
+        _ => anyhow::bail!("Invalid record type. Use: a, aaaa, ns, or txt"),
     };
 
     // Get database connection

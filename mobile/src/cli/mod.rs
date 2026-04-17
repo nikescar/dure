@@ -113,8 +113,8 @@ pub enum DnsCommands {
         /// Domain name to query
         domain: String,
     },
-    /// Query SSHFP records for a domain
-    Sshfp {
+    /// Query NS records for a domain
+    Ns {
         /// Domain name to query
         domain: String,
     },
@@ -178,11 +178,11 @@ pub enum NsCommands {
     },
     /// Insert a DNS record to a domain
     Insert {
-        /// Record type (a, aaaa, txt, sshfp)
+        /// Record type (a, aaaa, txt, ns)
         record_type: String,
         /// Domain name
         domain: String,
-        /// Record value (IP address for A/AAAA, text for TXT/SSHFP)
+        /// Record value (IP address for A/AAAA, nameserver for NS, text for TXT)
         value: String,
         /// Apply the change to DNS provider immediately
         #[arg(long)]
@@ -190,7 +190,7 @@ pub enum NsCommands {
     },
     /// Remove a DNS record from a domain
     Remove {
-        /// Record type (a, aaaa, txt, sshfp)
+        /// Record type (a, aaaa, txt, ns)
         record_type: String,
         /// Domain name
         domain: String,
@@ -521,8 +521,8 @@ pub fn run_cli_mode() -> anyhow::Result<()> {
             DnsCommands::Aaaa { domain } => {
                 commands::dns::execute_dns("aaaa", &domain)?;
             }
-            DnsCommands::Sshfp { domain } => {
-                commands::dns::execute_dns("sshfp", &domain)?;
+            DnsCommands::Ns { domain } => {
+                commands::dns::execute_dns("ns", &domain)?;
             }
             DnsCommands::Txt { domain } => {
                 commands::dns::execute_dns("txt", &domain)?;

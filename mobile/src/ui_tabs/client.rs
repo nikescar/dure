@@ -266,7 +266,7 @@ impl DnsClientSubTab {
                         ui.selectable_value(&mut self.query_type, "A".to_string(), "A");
                         ui.selectable_value(&mut self.query_type, "AAAA".to_string(), "AAAA");
                         ui.selectable_value(&mut self.query_type, "TXT".to_string(), "TXT");
-                        ui.selectable_value(&mut self.query_type, "SSHFP".to_string(), "SSHFP");
+                        ui.selectable_value(&mut self.query_type, "NS".to_string(), "NS");
                     });
 
                 ui.add_space(8.0);
@@ -400,7 +400,7 @@ impl DnsClientSubTab {
                 "A" => RecordType::A,
                 "AAAA" => RecordType::AAAA,
                 "TXT" => RecordType::TXT,
-                "SSHFP" => RecordType::SSHFP,
+                "NS" => RecordType::NS,
                 _ => {
                     self.load_error = Some(format!("Unknown record type: {}", self.query_type));
                     return;
@@ -1042,10 +1042,10 @@ impl KeyMgmtSubTab {
         // Display keyring paths
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use crate::calc::keyring::{get_default_kdbx_path, get_default_keyfile_path};
+            use crate::calc::keyring::{get_default_kdbx_path, get_default_kpkey_path};
 
-            if let (Ok(kdbx_path), Ok(keyfile_path)) =
-                (get_default_kdbx_path(), get_default_keyfile_path())
+            if let (Ok(kdbx_path), Ok(kpkey_path)) =
+                (get_default_kdbx_path(), get_default_kpkey_path())
             {
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
@@ -1056,8 +1056,8 @@ impl KeyMgmtSubTab {
                         ui.code(kdbx_path.display().to_string());
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Keyfile:");
-                        ui.code(keyfile_path.display().to_string());
+                        ui.label("KPKey:");
+                        ui.code(kpkey_path.display().to_string());
                     });
                 });
                 ui.add_space(8.0);
@@ -1193,9 +1193,11 @@ impl KeyMgmtSubTab {
         self.load_error = None;
         self.operation_message = None;
 
+        eprintln!("✓ Refreshing key management spreadsheet");
+
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use crate::calc::keyring::{ensure_kdbx_exists, get_default_keyfile_path, list_keys};
+            use crate::calc::keyring::{ensure_kdbx_exists, get_default_kpkey_path, list_keys};
 
             // Ensure database exists (auto-create if needed)
             let kdbx_path = match ensure_kdbx_exists() {
@@ -1206,7 +1208,7 @@ impl KeyMgmtSubTab {
                 }
             };
 
-            let keyfile_path = match get_default_keyfile_path() {
+            let kpkey_path = match get_default_kpkey_path() {
                 Ok(path) => path,
                 Err(e) => {
                     self.load_error = Some(format!("Failed to get keyfile path: {}", e));
@@ -1215,17 +1217,30 @@ impl KeyMgmtSubTab {
             };
 
             // List all keys
-            match list_keys(&kdbx_path, Some(&keyfile_path)) {
+            match list_keys(&kdbx_path, Some(&kpkey_path)) {
                 Ok(keys) => {
                     let mut data_rows = Vec::new();
 
                     for key in &keys {
                         let created = format_key_timestamp(key.created_at);
+                        let last_mod = key.last_modification
+                            .map(|ts| format_key_timestamp(ts as u64))
+                            .unwrap_or_else(|| "-".to_string());
+                        let last_access = key.last_access
+                            .map(|ts| format_key_timestamp(ts as u64))
+                            .unwrap_or_else(|| "-".to_string());
+                        let notes = key.notes.as_deref().unwrap_or("-");
+                        let ssh_key_status = if key.ssh_key.is_some() { "Yes" } else { "-" };
+
                         data_rows.push(vec![
                             key.domain.clone(),
                             key.username.clone(),
                             "••••••••".to_string(), // Hide password in display
                             created,
+                            last_mod,
+                            last_access,
+                            notes.to_string(),
+                            ssh_key_status.to_string(),
                         ]);
                     }
 
@@ -1233,10 +1248,14 @@ impl KeyMgmtSubTab {
 
                     // Create spreadsheet
                     let columns = vec![
-                        text_column("Domain", 250.0),
-                        text_column("Username", 250.0),
-                        text_column("Password", 100.0),
-                        text_column("Created", 150.0),
+                        text_column("Domain", 200.0),
+                        text_column("Username", 150.0),
+                        text_column("Password", 80.0),
+                        text_column("Created", 120.0),
+                        text_column("LastModified", 120.0),
+                        text_column("LastAccess", 120.0),
+                        text_column("Notes", 150.0),
+                        text_column("SSHKey", 60.0),
                     ];
 
                     match MaterialSpreadsheet::new("dure_keyring", columns) {
@@ -1278,7 +1297,7 @@ impl KeyMgmtSubTab {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use crate::calc::keyring::{add_key, get_default_kdbx_path, get_default_keyfile_path};
+            use crate::calc::keyring::{add_key, get_default_kdbx_path, get_default_kpkey_path};
 
             let kdbx_path = match get_default_kdbx_path() {
                 Ok(path) => path,
@@ -1288,7 +1307,7 @@ impl KeyMgmtSubTab {
                 }
             };
 
-            let keyfile_path = match get_default_keyfile_path() {
+            let kpkey_path = match get_default_kpkey_path() {
                 Ok(path) => path,
                 Err(e) => {
                     self.load_error = Some(format!("Failed to get keyfile path: {}", e));
@@ -1298,7 +1317,7 @@ impl KeyMgmtSubTab {
 
             match add_key(
                 &kdbx_path,
-                Some(&keyfile_path),
+                Some(&kpkey_path),
                 &self.add_domain,
                 &self.add_username,
                 &self.add_password,
@@ -1339,7 +1358,7 @@ impl KeyMgmtSubTab {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::calc::keyring::{
-                delete_key, get_default_kdbx_path, get_default_keyfile_path,
+                delete_key, get_default_kdbx_path, get_default_kpkey_path,
             };
 
             let kdbx_path = match get_default_kdbx_path() {
@@ -1350,7 +1369,7 @@ impl KeyMgmtSubTab {
                 }
             };
 
-            let keyfile_path = match get_default_keyfile_path() {
+            let kpkey_path = match get_default_kpkey_path() {
                 Ok(path) => path,
                 Err(e) => {
                     self.load_error = Some(format!("Failed to get keyfile path: {}", e));
@@ -1358,7 +1377,7 @@ impl KeyMgmtSubTab {
                 }
             };
 
-            match delete_key(&kdbx_path, Some(&keyfile_path), &self.del_domain) {
+            match delete_key(&kdbx_path, Some(&kpkey_path), &self.del_domain) {
                 Ok(deleted) => {
                     if deleted {
                         self.operation_message =

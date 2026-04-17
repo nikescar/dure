@@ -48,6 +48,16 @@ pub struct SshTab {
     init_host: Option<String>,
     #[cfg_attr(feature = "serde", serde(skip))]
     init_progress_log: Vec<String>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    init_promise: Option<poll_promise::Promise<Result<Vec<String>, String>>>,
+
+    // Connection test state
+    #[cfg_attr(feature = "serde", serde(skip))]
+    test_in_progress: bool,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    test_promise: Option<poll_promise::Promise<Result<ssh::SshConnectionResult, String>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    test_result: Option<Result<String, String>>,
 }
 
 impl Default for SshTab {
@@ -91,6 +101,10 @@ impl Default for SshTab {
             init_in_progress: false,
             init_host: None,
             init_progress_log: Vec::new(),
+            init_promise: None,
+            test_in_progress: false,
+            test_promise: None,
+            test_result: None,
         }
     }
 }
@@ -148,6 +162,23 @@ impl SshTab {
                     if idx < self.rows.len() {
                         let host = self.rows[idx][0].clone();
                         self.execute_delete_host(host);
+                    }
+                }
+            }
+
+            // Check Connection button - enabled only when a row is selected
+            let check_button = MaterialButton::outlined("Check Connection");
+            let check_button = if has_selection && !self.test_in_progress {
+                check_button
+            } else {
+                check_button.enabled(false)
+            };
+
+            if ui.add(check_button).clicked() {
+                if let Some(idx) = selected_row_idx {
+                    if idx < self.rows.len() {
+                        let host = self.rows[idx][0].clone();
+                        self.execute_test_connection(host);
                     }
                 }
             }
@@ -219,6 +250,14 @@ impl SshTab {
         // Init progress display
         if self.init_in_progress {
             self.render_init_progress(ui);
+        }
+
+        // Poll for connection test completion
+        self.poll_connection_test();
+
+        // Show connection test result
+        if let Some(result) = self.test_result.clone() {
+            self.render_test_result(ui.ctx(), &result);
         }
     }
 
@@ -411,6 +450,7 @@ impl SshTab {
                         } else {
                             None
                         },
+                        keyring_domain: None,
                         port,
                         initialized: false,
                         last_status: None,
@@ -425,6 +465,7 @@ impl SshTab {
                             // Record audit event
                             let _ = audit::push_gui("system", "desktop", "ssh add", &self.add_host);
 
+                            eprintln!("✓ SSH host added, refreshing spreadsheet");
                             self.loaded = false; // Trigger reload
                             self.load_error = None;
                         }
@@ -455,6 +496,7 @@ impl SshTab {
                                 // Record audit event
                                 let _ = audit::push_gui("system", "desktop", "ssh del", &host);
 
+                                eprintln!("✓ SSH host deleted, refreshing spreadsheet");
                                 self.loaded = false; // Trigger reload
                                 self.selected_row = None;
                                 self.load_error = None;
@@ -483,50 +525,179 @@ impl SshTab {
             self.init_progress_log
                 .push(format!("Initializing SSH host: {}", host));
 
-            match load_config() {
-                Ok((mut app_config, config_path)) => {
-                    // Find host config
-                    if let Some(host_config) =
-                        app_config.ssh_hosts.iter_mut().find(|h| h.host == host)
-                    {
-                        // Run initialization
-                        match ssh::initialize_host(host_config) {
-                            Ok(progress_log) => {
-                                self.init_progress_log.extend(progress_log);
-                                host_config.initialized = true;
-
-                                // Save config
-                                match app_config.save(&config_path) {
-                                    Ok(_) => {
-                                        self.loaded = false; // Trigger reload
-                                        self.init_progress_log
-                                            .push("✓ Configuration saved".to_string());
-                                    }
-                                    Err(e) => {
-                                        self.init_progress_log
-                                            .push(format!("⚠ Failed to save config: {e}"));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.init_progress_log
-                                    .push(format!("✗ Initialization failed: {e}"));
-                            }
-                        }
-                    } else {
-                        self.init_progress_log
-                            .push(format!("✗ SSH host '{}' not found", host));
-                    }
+            // Load config and get host config
+            let host_config_clone = match load_config() {
+                Ok((app_config, _)) => {
+                    app_config
+                        .ssh_hosts
+                        .iter()
+                        .find(|h| h.host == host)
+                        .cloned()
                 }
                 Err(e) => {
                     self.init_progress_log
                         .push(format!("✗ Failed to load config: {e}"));
+                    self.init_in_progress = false;
+                    return;
                 }
+            };
+
+            let Some(host_config) = host_config_clone else {
+                self.init_progress_log
+                    .push(format!("✗ SSH host '{}' not found", host));
+                self.init_in_progress = false;
+                return;
+            };
+
+            // Spawn initialization in background thread
+            let promise = poll_promise::Promise::spawn_thread("ssh_init", move || {
+                ssh::initialize_host(&host_config)
+                    .map_err(|e| format!("{}", e))
+            });
+
+            self.init_promise = Some(promise);
+        }
+    }
+
+    fn execute_test_connection(&mut self, host: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.test_in_progress = true;
+            self.test_result = None;
+
+            // Load config and get host config
+            let host_config_clone = match load_config() {
+                Ok((app_config, _)) => {
+                    app_config
+                        .ssh_hosts
+                        .iter()
+                        .find(|h| h.host == host)
+                        .cloned()
+                }
+                Err(e) => {
+                    self.test_result = Some(Err(format!("Failed to load config: {e}")));
+                    self.test_in_progress = false;
+                    return;
+                }
+            };
+
+            let Some(host_config) = host_config_clone else {
+                self.test_result = Some(Err(format!("SSH host '{}' not found", host)));
+                self.test_in_progress = false;
+                return;
+            };
+
+            // Spawn connection test in background thread
+            let promise = poll_promise::Promise::spawn_thread("ssh_test", move || {
+                ssh::test_connection(&host_config)
+                    .map_err(|e| format!("{}", e))
+            });
+
+            self.test_promise = Some(promise);
+        }
+    }
+
+    fn poll_connection_test(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(promise) = &self.test_promise {
+            if let Some(result) = promise.ready() {
+                match result {
+                    Ok(conn_result) => {
+                        self.test_result = Some(Ok(conn_result.message.clone()));
+                    }
+                    Err(e) => {
+                        self.test_result = Some(Err(e.clone()));
+                    }
+                }
+
+                self.test_promise = None;
+                self.test_in_progress = false;
             }
         }
     }
 
+    fn render_test_result(&mut self, ctx: &egui::Context, result: &Result<String, String>) {
+        let mut open = true;
+
+        egui::Window::new("Connection Test Result")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                match result {
+                    Ok(msg) => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("✓").color(egui::Color32::GREEN).size(20.0));
+                            ui.label(egui::RichText::new("Connection successful").strong());
+                        });
+                        ui.add_space(8.0);
+                        ui.label(msg);
+                    }
+                    Err(msg) => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("✗").color(egui::Color32::RED).size(20.0));
+                            ui.label(egui::RichText::new("Connection failed").strong());
+                        });
+                        ui.add_space(8.0);
+                        ui.colored_label(egui::Color32::RED, msg);
+                    }
+                }
+
+                ui.add_space(12.0);
+
+                if ui.button("Close").clicked() {
+                    self.test_result = None;
+                }
+            });
+
+        if !open {
+            self.test_result = None;
+        }
+    }
+
     fn render_init_progress(&mut self, ui: &mut egui::Ui) {
+        // Poll for completion
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(promise) = &self.init_promise {
+            if let Some(result) = promise.ready() {
+                match result {
+                    Ok(progress_log) => {
+                        self.init_progress_log.extend(progress_log.clone());
+
+                        // Mark host as initialized and save config
+                        if let Some(host) = &self.init_host {
+                            if let Ok((mut app_config, config_path)) = load_config() {
+                                if let Some(host_config) =
+                                    app_config.ssh_hosts.iter_mut().find(|h| &h.host == host)
+                                {
+                                    host_config.initialized = true;
+
+                                    match app_config.save(&config_path) {
+                                        Ok(_) => {
+                                            eprintln!("✓ SSH host initialized, refreshing spreadsheet");
+                                            self.loaded = false; // Trigger reload
+                                            self.init_progress_log
+                                                .push("✓ Configuration saved".to_string());
+                                        }
+                                        Err(e) => {
+                                            self.init_progress_log
+                                                .push(format!("⚠ Failed to save config: {e}"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.init_progress_log
+                            .push(format!("✗ Initialization failed: {}", e));
+                    }
+                }
+
+                self.init_promise = None;
+            }
+        }
+
         ui.add_space(12.0);
         ui.separator();
         ui.heading("Initialization Progress");
@@ -536,6 +707,16 @@ impl SshTab {
         }
 
         ui.add_space(8.0);
+
+        // Show spinner if still in progress
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.init_promise.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Initialization in progress...");
+            });
+            ui.add_space(8.0);
+        }
 
         egui::ScrollArea::vertical()
             .max_height(200.0)
@@ -547,10 +728,18 @@ impl SshTab {
 
         ui.add_space(8.0);
 
-        if ui.button("Close").clicked() {
+        let can_close = self.init_promise.is_none();
+        if ui.add_enabled(can_close, egui::Button::new("Close")).clicked() {
             self.init_in_progress = false;
             self.init_host = None;
             self.init_progress_log.clear();
+        }
+
+        if !can_close {
+            ui.colored_label(
+                egui::Color32::GRAY,
+                "Please wait for initialization to complete",
+            );
         }
     }
 }

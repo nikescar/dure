@@ -336,7 +336,7 @@ durepubkey=my_system_chacha_public_key ; # pubkey
 | Command | Description | Example |
 |---------|-------------|---------|
 | `ssh status` | Show list and status of ssh hosts | `dure ssh status` |
-| `ssh add` | Add host to list | `dure ssh addhost username@dure.com --pass password --prvkey ~/.ssh/idrsa` |
+| `ssh add` | Add host to list | `dure ssh addhost username@dure.com --pass password --prvkey ~/.ssh/id_ed25519` |
 | `ssh del` | Delete host from list | `dure ssh delhost username@dure.com` |
 
 ### ACME Operations(SSH)

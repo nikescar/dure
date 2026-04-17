@@ -11,9 +11,6 @@ platforms:
   # Example GCP (Google Cloud Platform) configuration
   - name: "my-gcp"
     platform_type: "gcp"
-    gcp_project_id: ""  # GCP project ID
-    gcp_billing_account: ""  # Billing account ID
-    gcp_region: ""  # Deployment region (e.g., us-central1, asia-northeast3)
     api_token: ""  # OAuth access token (auto-set by 'dure platform init')
     service_account_json: ""  # Path to service account JSON file
 

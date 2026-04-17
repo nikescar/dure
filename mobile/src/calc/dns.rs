@@ -13,7 +13,7 @@ pub enum RecordType {
     A,
     AAAA,
     TXT,
-    SSHFP,
+    NS,
 }
 
 impl RecordType {
@@ -22,7 +22,7 @@ impl RecordType {
             RecordType::A => "A",
             RecordType::AAAA => "AAAA",
             RecordType::TXT => "TXT",
-            RecordType::SSHFP => "SSHFP",
+            RecordType::NS => "NS",
         }
     }
 
@@ -31,7 +31,7 @@ impl RecordType {
             RecordType::A => 1,
             RecordType::AAAA => 28,
             RecordType::TXT => 16,
-            RecordType::SSHFP => 44,
+            RecordType::NS => 2,
         }
     }
 }

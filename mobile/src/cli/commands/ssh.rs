@@ -133,6 +133,7 @@ pub fn execute_ssh_add(
         host: host.clone(),
         password: pass,
         private_key_path,
+        keyring_domain: None,
         port,
         initialized: false,
         last_status: None,

@@ -47,8 +47,9 @@ else
     cargo build --target wasm32-unknown-unknown
     WASM_PATH=../target/wasm32-unknown-unknown/debug/dure.wasm
 fi
-# Build wasm
 
+rm -rf dist/*
+# Build wasm
 wasm-bindgen "$WASM_PATH" --out-dir dist --web
 # bindgen
 
@@ -90,4 +91,13 @@ done
 cd ..
 echo "Build complete! Assets are in dist/ with compressed versions (.gz and .br)"
 
+rm -rf ./serv/*
 cp -rf dist/* ./serv
+
+# Copy to ~/work/dure-wasm if it exists
+if [ -d ~/work/dure-wasm ]; then
+    rm -rf ~/work/dure-wasm/*
+    echo "Copying to ~/work/dure-wasm..."
+    cp -rf dist/* ~/work/dure-wasm/
+    echo "Copied to ~/work/dure-wasm"
+fi

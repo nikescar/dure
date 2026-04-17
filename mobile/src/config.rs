@@ -6,6 +6,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// VM instance information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmInstance {
+    pub name: String,
+    pub instance_id: String,
+    pub zone: String,
+    pub gcp_region: String,
+    pub machine_type: String,
+    pub status: String,
+    pub external_ip: Option<String>,
+    pub internal_ip: Option<String>,
+    pub gcp_project_id: String,
+    pub gcp_billing_account: Option<String>,
+    pub created_at: i64, // Unix timestamp
+    #[serde(default)]
+    pub ssh_key_name: Option<String>, // Keyring domain for SSH private key
+}
+
 /// Cloud platform configuration (GCP, Firebase, Supabase)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CloudPlatformConfig {
@@ -13,14 +31,10 @@ pub struct CloudPlatformConfig {
     pub platform_type: String, // "gcp", "firebase", "supabase"
 
     // GCP specific
-    pub gcp_project_id: Option<String>,
-    pub gcp_billing_account: Option<String>,
-    pub gcp_region: Option<String>,
-    pub gcp_oauth_client_id: Option<String>,
-    pub gcp_oauth_client_secret: Option<String>,
     pub gcp_oauth_access_token: Option<String>,
     pub gcp_oauth_refresh_token: Option<String>,
     pub gcp_oauth_token_expiry: Option<i64>, // Unix timestamp
+    pub gcp_connected_email: Option<String>, // Connected Google account email
 
     // Firebase specific
     pub firebase_project_id: Option<String>,
@@ -34,6 +48,10 @@ pub struct CloudPlatformConfig {
     // Common fields
     pub api_token: Option<String>,
     pub service_account_json: Option<String>,
+
+    // VM instances (for GCP)
+    #[serde(default)]
+    pub vms: Vec<VmInstance>,
 }
 
 /// Platform configuration (deprecated, use platforms list)
@@ -134,6 +152,9 @@ pub struct SshHostConfig {
     pub password: Option<String>,
     /// Optional path to private key file
     pub private_key_path: Option<String>,
+    /// Optional keyring domain for private key (e.g., "gcp.platform.vm-name")
+    #[serde(default)]
+    pub keyring_domain: Option<String>,
     /// SSH port (default: 22)
     #[serde(default = "default_ssh_port")]
     pub port: u16,
@@ -155,6 +176,7 @@ impl Default for SshHostConfig {
             host: String::new(),
             password: None,
             private_key_path: None,
+            keyring_domain: None,
             port: default_ssh_port(),
             initialized: false,
             last_status: None,

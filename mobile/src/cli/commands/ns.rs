@@ -81,7 +81,7 @@ fn save_ns_config(ns_config: &NsConfig) -> Result<()> {
 pub fn execute_ns_status(domain: &Option<String>) -> Result<()> {
     let config = load_ns_config()?;
 
-    if config.domains.is_empty() {
+    if config.total_domains() == 0 {
         eprintln!("No domains registered.");
         eprintln!();
         eprintln!("Add a domain with:");
@@ -91,15 +91,19 @@ pub fn execute_ns_status(domain: &Option<String>) -> Result<()> {
 
     if let Some(domain_name) = domain {
         // Show specific domain
-        let domain_entry = config
-            .get_domain(domain_name)
+        let (provider_name, domain_entry) = config
+            .get_domain_any_provider(domain_name)
             .ok_or_else(|| anyhow::anyhow!("Domain {} not found", domain_name))?;
 
+        let api_token = config
+            .get_api_token(&provider_name)
+            .ok_or_else(|| anyhow::anyhow!("API token not found for provider {}", provider_name))?;
+
         eprintln!("Domain: {}", domain_entry.domain);
-        eprintln!("Provider: {}", domain_entry.provider);
+        eprintln!("Provider: {}", provider_name);
         eprintln!(
             "API Token: {}...",
-            &domain_entry.api_token.chars().take(8).collect::<String>()
+            &api_token.chars().take(8).collect::<String>()
         );
         eprintln!();
         eprintln!("Records:");
@@ -120,8 +124,8 @@ pub fn execute_ns_status(domain: &Option<String>) -> Result<()> {
         eprintln!("Registered Domains:");
         eprintln!();
 
-        for domain_entry in &config.domains {
-            eprintln!("• {} ({})", domain_entry.domain, domain_entry.provider);
+        for (provider_name, domain_entry) in config.iter_all_domains() {
+            eprintln!("• {} ({})", domain_entry.domain, provider_name);
 
             if domain_entry.records.is_empty() {
                 eprintln!("  (no records)");
@@ -178,7 +182,7 @@ pub fn execute_ns_add(domain: &str, provider: &str, token: &str) -> Result<()> {
     };
 
     let provider_display = normalized_provider.clone();
-    config.add_domain(domain.to_string(), normalized_provider, token.to_string())?;
+    config.add_domain(normalized_provider, domain.to_string(), token.to_string())?;
     save_ns_config(&config)?;
 
     // Record audit event
@@ -202,13 +206,29 @@ pub fn execute_ns_add(domain: &str, provider: &str, token: &str) -> Result<()> {
 pub fn execute_ns_del(domain: &str) -> Result<()> {
     let mut config = load_ns_config()?;
 
-    config.remove_domain(domain)?;
+    // Find which provider(s) have this domain
+    let providers = config.find_providers_for_domain(domain);
+
+    if providers.is_empty() {
+        anyhow::bail!("Domain '{}' not found", domain);
+    }
+
+    if providers.len() > 1 {
+        anyhow::bail!(
+            "Domain '{}' exists in multiple providers: {}. Please specify provider.",
+            domain,
+            providers.join(", ")
+        );
+    }
+
+    let provider = &providers[0];
+    config.remove_domain(provider, domain)?;
     save_ns_config(&config)?;
 
     // Record audit event
     let _ = audit::push_cli("system", "cli", "ns del", domain);
 
-    eprintln!("✓ Domain '{}' removed", domain);
+    eprintln!("✓ Domain '{}' removed from provider '{}'", domain, provider);
 
     Ok(())
 }
@@ -222,25 +242,37 @@ pub fn execute_ns_insert(record_type: &str, domain: &str, value: &str, apply: bo
     // Parse record type
     let rec_type = RecordType::from_str(record_type).ok_or_else(|| {
         anyhow::anyhow!(
-            "Invalid record type '{}'. Use: a, aaaa, txt, sshfp",
+            "Invalid record type '{}'. Use: a, aaaa, txt, ns",
             record_type
         )
     })?;
 
-    // Validate domain exists
-    let _domain_entry = config.get_domain(domain).ok_or_else(|| {
-        anyhow::anyhow!(
+    // Find which provider(s) have this domain
+    let providers = config.find_providers_for_domain(domain);
+
+    if providers.is_empty() {
+        anyhow::bail!(
             "Domain '{}' not found. Add it first with 'dure ns add'",
             domain
-        )
-    })?;
+        );
+    }
 
-    // Add record to config
-    config.add_record(domain, rec_type.clone(), value.to_string())?;
+    if providers.len() > 1 {
+        anyhow::bail!(
+            "Domain '{}' exists in multiple providers: {}. Please specify provider.",
+            domain,
+            providers.join(", ")
+        );
+    }
+
+    let provider = &providers[0];
+
+    // Add record to config (using "@" for root domain)
+    config.add_record(provider, domain, rec_type.clone(), "@".to_string(), value.to_string())?;
     save_ns_config(&config)?;
 
     // Record audit event
-    let record_desc = format!("{} {} {}", domain, record_type, value);
+    let record_desc = format!("{} @ {} {}", domain, record_type, value);
     let _ = audit::push_cli("system", "cli", "ns insert", &record_desc);
 
     eprintln!(
@@ -256,14 +288,15 @@ pub fn execute_ns_insert(record_type: &str, domain: &str, value: &str, apply: bo
         eprintln!();
         eprintln!("Applying to DNS provider...");
 
-        let domain_entry = config.get_domain(domain).unwrap();
+        let domain_entry = config.get_domain(provider, domain).unwrap();
+        let api_token = config.get_api_token(provider).unwrap();
         let record = domain_entry
             .records
             .iter()
             .find(|r| r.record_type == rec_type && r.value == value)
             .unwrap();
 
-        match apply_record(domain_entry, record) {
+        match apply_record(provider, &api_token, domain, record) {
             Ok(_) => {
                 eprintln!("✓ Record applied to DNS provider");
             }
@@ -291,12 +324,29 @@ pub fn execute_ns_remove(record_type: &str, domain: &str, value: &str) -> Result
     // Parse record type
     let rec_type = RecordType::from_str(record_type).ok_or_else(|| {
         anyhow::anyhow!(
-            "Invalid record type '{}'. Use: a, aaaa, txt, sshfp",
+            "Invalid record type '{}'. Use: a, aaaa, txt, ns",
             record_type
         )
     })?;
 
-    config.remove_record(domain, rec_type, value)?;
+    // Find which provider(s) have this domain
+    let providers = config.find_providers_for_domain(domain);
+
+    if providers.is_empty() {
+        anyhow::bail!("Domain '{}' not found", domain);
+    }
+
+    if providers.len() > 1 {
+        anyhow::bail!(
+            "Domain '{}' exists in multiple providers: {}. Please specify provider.",
+            domain,
+            providers.join(", ")
+        );
+    }
+
+    let provider = &providers[0];
+
+    config.remove_record(provider, domain, rec_type, value)?;
     save_ns_config(&config)?;
 
     // Record audit event

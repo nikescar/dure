@@ -2,12 +2,12 @@
 //!
 //! This module provides key management functionality using KeePass database files
 //! directly, without relying on SQLite. All operations work on a KeePass file
-//! (default: key.kdbx) protected by a keyfile (default: idrsa).
+//! (default: key.kdbx) protected by a keyfile (default: id_ed25519).
 //!
 //! ## Architecture
 //!
 //! - **Storage**: KeePass 4 format (.kdbx) file
-//! - **Protection**: Ed25519 keyfile (idrsa) + optional password
+//! - **Protection**: Ed25519 keyfile (id_ed25519) + optional password
 //! - **Auto-init**: Creates keyfile if missing using go-webauthn
 //! - **No Database**: All operations are file-based
 //!
@@ -22,8 +22,8 @@
 //! ## Default Paths
 //!
 //! - KeePass DB: `~/.config/dure/key.kdbx`
-//! - Keyfile: `~/.config/dure/idrsa`
-//! - Public Key: `~/.config/dure/idrsa.pub`
+//! - KPKey: `~/.config/dure/id_ed25519`
+//! - KPPubKey: `~/.config/dure/id_ed25519.pub`
 
 use anyhow::{Context, Result};
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 
 const KEEPASS_GROUP_NAME: &str = "Dure Keys";
 const DEFAULT_KDBX_NAME: &str = "key.kdbx";
-const DEFAULT_KEYFILE_NAME: &str = "idrsa";
-const DEFAULT_PUBKEY_NAME: &str = "idrsa.pub";
+const DEFAULT_KPKEY_NAME: &str = "id_ed25519";
+const DEFAULT_KPPUBKEY_NAME: &str = "id_ed25519.pub";
 
 /// A key entry in the keyring
 #[derive(Debug, Clone)]
@@ -48,6 +48,10 @@ pub struct KeyEntry {
     pub username: String,
     pub password: String,
     pub created_at: u64,
+    pub last_modification: Option<i64>,
+    pub last_access: Option<i64>,
+    pub notes: Option<String>,
+    pub ssh_key: Option<Vec<u8>>, // Binary SSH private key
 }
 
 /// Get the default config directory for dure
@@ -69,14 +73,14 @@ pub fn get_default_kdbx_path() -> Result<PathBuf> {
     Ok(get_config_dir()?.join(DEFAULT_KDBX_NAME))
 }
 
-/// Get the default keyfile path
-pub fn get_default_keyfile_path() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join(DEFAULT_KEYFILE_NAME))
+/// Get the default KPKey path
+pub fn get_default_kpkey_path() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join(DEFAULT_KPKEY_NAME))
 }
 
-/// Get the default public key path
-pub fn get_default_pubkey_path() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join(DEFAULT_PUBKEY_NAME))
+/// Get the default KPPubKey path
+pub fn get_default_kppubkey_path() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join(DEFAULT_KPPUBKEY_NAME))
 }
 
 /// Generate Ed25519 key pair if it doesn't exist
@@ -84,13 +88,13 @@ pub fn get_default_pubkey_path() -> Result<PathBuf> {
 /// Uses go-webauthn crypto bridge to generate keys.
 /// Only available on desktop and Android (not WASM).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn ensure_keyfile_exists() -> Result<PathBuf> {
-    let keyfile_path = get_default_keyfile_path()?;
-    let pubkey_path = get_default_pubkey_path()?;
+pub fn ensure_kpkey_exists() -> Result<PathBuf> {
+    let kpkey_path = get_default_kpkey_path()?;
+    let kppubkey_path = get_default_kppubkey_path()?;
 
-    // If keyfile already exists, return it
-    if keyfile_path.exists() {
-        return Ok(keyfile_path);
+    // If KPKey already exists, return it
+    if kpkey_path.exists() {
+        return Ok(kpkey_path);
     }
 
     // Create config directory if it doesn't exist
@@ -108,37 +112,37 @@ pub fn ensure_keyfile_exists() -> Result<PathBuf> {
         anyhow::bail!("Failed to generate Ed25519 key: {}", gen_resp.error);
     }
 
-    // Write private key to keyfile
-    let mut keyfile = File::create(&keyfile_path).context("Failed to create keyfile")?;
-    keyfile
+    // Write private key to KPKey
+    let mut kpkey_file = File::create(&kpkey_path).context("Failed to create KPKey")?;
+    kpkey_file
         .write_all(&gen_resp.private_key)
         .context("Failed to write private key")?;
 
-    // Write public key to pubkey file
-    let mut pubkey_file = File::create(&pubkey_path).context("Failed to create public key file")?;
-    pubkey_file
+    // Write public key to KPPubKey file
+    let mut kppubkey_file = File::create(&kppubkey_path).context("Failed to create KPPubKey file")?;
+    kppubkey_file
         .write_all(&gen_resp.public_key)
         .context("Failed to write public key")?;
 
     eprintln!("✓ Generated new Ed25519 key pair:");
-    eprintln!("  Private key: {}", keyfile_path.display());
-    eprintln!("  Public key:  {}", pubkey_path.display());
+    eprintln!("  KPKey (private): {}", kpkey_path.display());
+    eprintln!("  KPPubKey:        {}", kppubkey_path.display());
 
-    Ok(keyfile_path)
+    Ok(kpkey_path)
 }
 
 /// WASM stub - key generation not supported
 #[cfg(target_arch = "wasm32")]
-pub fn ensure_keyfile_exists() -> Result<PathBuf> {
+pub fn ensure_kpkey_exists() -> Result<PathBuf> {
     anyhow::bail!(
-        "Keyfile generation not supported on WASM. Please import a keyfile from desktop/Android."
+        "KPKey generation not supported on WASM. Please import a KPKey from desktop/Android."
     );
 }
 
 /// Initialize the KeePass database if it doesn't exist
 ///
-/// Creates a new KeePass database with the default keyfile.
-/// If keyfile doesn't exist, generates it first.
+/// Creates a new KeePass database with the default KPKey.
+/// If KPKey doesn't exist, generates it first.
 pub fn ensure_kdbx_exists() -> Result<PathBuf> {
     let kdbx_path = get_default_kdbx_path()?;
 
@@ -147,8 +151,8 @@ pub fn ensure_kdbx_exists() -> Result<PathBuf> {
         return Ok(kdbx_path);
     }
 
-    // Ensure keyfile exists (generate if needed)
-    let keyfile_path = ensure_keyfile_exists()?;
+    // Ensure KPKey exists (generate if needed)
+    let kpkey_path = ensure_kpkey_exists()?;
 
     // Create config directory if it doesn't exist
     let config_dir = get_config_dir()?;
@@ -158,13 +162,13 @@ pub fn ensure_kdbx_exists() -> Result<PathBuf> {
     let mut db = Database::new(Default::default());
     db.root.name = KEEPASS_GROUP_NAME.to_string();
 
-    // Save to file with keyfile
+    // Save to file with KPKey
     let mut file = File::create(&kdbx_path).context("Failed to create KeePass database file")?;
 
-    let keyfile_data = std::fs::read(&keyfile_path).context("Failed to read keyfile")?;
+    let kpkey_data = std::fs::read(&kpkey_path).context("Failed to read KPKey")?;
 
-    let mut keyfile_cursor = Cursor::new(keyfile_data);
-    let key = DatabaseKey::new().with_keyfile(&mut keyfile_cursor)?;
+    let mut kpkey_cursor = Cursor::new(kpkey_data);
+    let key = DatabaseKey::new().with_keyfile(&mut kpkey_cursor)?;
 
     db.save(&mut file, key)
         .context("Failed to save KeePass database")?;
@@ -174,16 +178,16 @@ pub fn ensure_kdbx_exists() -> Result<PathBuf> {
     Ok(kdbx_path)
 }
 
-/// Open a KeePass database with keyfile
+/// Open a KeePass database with KPKey
 ///
 /// # Arguments
 ///
 /// * `kdbx_path` - Path to the .kdbx file
-/// * `keyfile_path` - Optional path to keyfile (defaults to idrsa)
-/// * `password` - Optional password (can be empty for keyfile-only auth)
+/// * `kpkey_path` - Optional path to KPKey (defaults to id_ed25519)
+/// * `password` - Optional password (can be empty for KPKey-only auth)
 pub fn open_kdbx(
     kdbx_path: &Path,
-    keyfile_path: Option<&Path>,
+    kpkey_path: Option<&Path>,
     password: Option<&str>,
 ) -> Result<Database> {
     let mut file = File::open(kdbx_path)
@@ -198,16 +202,16 @@ pub fn open_kdbx(
         }
     }
 
-    // Add keyfile if provided
-    if let Some(kf_path) = keyfile_path {
-        let keyfile_data = std::fs::read(kf_path)
-            .with_context(|| format!("Failed to read keyfile: {}", kf_path.display()))?;
-        let mut keyfile_cursor = Cursor::new(keyfile_data);
-        key = key.with_keyfile(&mut keyfile_cursor)?;
+    // Add KPKey if provided
+    if let Some(kf_path) = kpkey_path {
+        let kpkey_data = std::fs::read(kf_path)
+            .with_context(|| format!("Failed to read KPKey: {}", kf_path.display()))?;
+        let mut kpkey_cursor = Cursor::new(kpkey_data);
+        key = key.with_keyfile(&mut kpkey_cursor)?;
     }
 
     Database::open(&mut file, key)
-        .context("Failed to open KeePass database. Check password/keyfile.")
+        .context("Failed to open KeePass database. Check password/KPKey.")
 }
 
 /// Save a KeePass database to file
@@ -216,12 +220,12 @@ pub fn open_kdbx(
 ///
 /// * `db` - The database to save
 /// * `kdbx_path` - Path to save the .kdbx file
-/// * `keyfile_path` - Optional path to keyfile (defaults to idrsa)
-/// * `password` - Optional password (can be empty for keyfile-only auth)
+/// * `kpkey_path` - Optional path to KPKey (defaults to id_ed25519)
+/// * `password` - Optional password (can be empty for KPKey-only auth)
 pub fn save_kdbx(
     db: &mut Database,
     kdbx_path: &Path,
-    keyfile_path: Option<&Path>,
+    kpkey_path: Option<&Path>,
     password: Option<&str>,
 ) -> Result<()> {
     let mut file = File::create(kdbx_path)
@@ -236,12 +240,12 @@ pub fn save_kdbx(
         }
     }
 
-    // Add keyfile if provided
-    if let Some(kf_path) = keyfile_path {
-        let keyfile_data = std::fs::read(kf_path)
-            .with_context(|| format!("Failed to read keyfile: {}", kf_path.display()))?;
-        let mut keyfile_cursor = Cursor::new(keyfile_data);
-        key = key.with_keyfile(&mut keyfile_cursor)?;
+    // Add KPKey if provided
+    if let Some(kf_path) = kpkey_path {
+        let kpkey_data = std::fs::read(kf_path)
+            .with_context(|| format!("Failed to read KPKey: {}", kf_path.display()))?;
+        let mut kpkey_cursor = Cursor::new(kpkey_data);
+        key = key.with_keyfile(&mut kpkey_cursor)?;
     }
 
     db.save(&mut file, key)
@@ -249,8 +253,8 @@ pub fn save_kdbx(
 }
 
 /// List all keys from KeePass database
-pub fn list_keys(kdbx_path: &Path, keyfile_path: Option<&Path>) -> Result<Vec<KeyEntry>> {
-    let db = open_kdbx(kdbx_path, keyfile_path, None)?;
+pub fn list_keys(kdbx_path: &Path, kpkey_path: Option<&Path>) -> Result<Vec<KeyEntry>> {
+    let db = open_kdbx(kdbx_path, kpkey_path, None)?;
     let mut keys = Vec::new();
     collect_keys_from_group(&db.root, &mut keys)?;
     Ok(keys)
@@ -295,37 +299,82 @@ fn parse_key_entry(entry: &Entry) -> Result<Option<KeyEntry>> {
         None => String::new(),
     };
 
-    // Get created_at from custom field
+    // Get created_at from custom field or times.creation
     let created_at = match entry.fields.get("created_at") {
         Some(value) => value.get().parse::<u64>().unwrap_or_else(|_| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
+            entry.times.creation
+                .map(|dt| dt.and_utc().timestamp() as u64)
+                .unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                })
         }),
-        None => std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        None => entry.times.creation
+            .map(|dt| dt.and_utc().timestamp() as u64)
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
     };
+
+    // Get last modification time
+    let last_modification = entry.times.last_modification
+        .map(|dt| dt.and_utc().timestamp());
+
+    // Get last access time
+    let last_access = entry.times.last_access
+        .map(|dt| dt.and_utc().timestamp());
+
+    // Get notes from Notes field
+    let notes = entry.fields.get("Notes")
+        .map(|value| value.get().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Get SSH key from attachments (look for "ssh_key" or "private_key" attachment)
+    let ssh_key = entry.attachments.get("ssh_key")
+        .or_else(|| entry.attachments.get("private_key"))
+        .or_else(|| entry.attachments.get("id_rsa"))
+        .or_else(|| entry.attachments.get("id_ed25519"))
+        .map(|attachment| attachment.data.get().clone());
 
     Ok(Some(KeyEntry {
         domain,
         username,
         password,
         created_at,
+        last_modification,
+        last_access,
+        notes,
+        ssh_key,
     }))
 }
 
 /// Add a new key to the KeePass database
 pub fn add_key(
     kdbx_path: &Path,
-    keyfile_path: Option<&Path>,
+    kpkey_path: Option<&Path>,
     domain: &str,
     username: &str,
     password: &str,
 ) -> Result<()> {
-    let mut db = open_kdbx(kdbx_path, keyfile_path, None)?;
+    add_key_with_ssh(kdbx_path, kpkey_path, domain, username, password, None, None)
+}
+
+/// Add a new key with optional SSH key and notes to the KeePass database
+pub fn add_key_with_ssh(
+    kdbx_path: &Path,
+    kpkey_path: Option<&Path>,
+    domain: &str,
+    username: &str,
+    password: &str,
+    ssh_key: Option<&[u8]>,
+    notes: Option<&str>,
+) -> Result<()> {
+    let mut db = open_kdbx(kdbx_path, kpkey_path, None)?;
 
     // Check if key with same domain already exists
     let existing_keys = {
@@ -365,18 +414,39 @@ pub fn add_key(
         ),
     );
 
+    // Add notes if provided
+    if let Some(notes_text) = notes {
+        if !notes_text.is_empty() {
+            entry.fields.insert(
+                "Notes".to_string(),
+                Value::unprotected(notes_text.to_string()),
+            );
+        }
+    }
+
+    // Add SSH key as binary attachment if provided
+    if let Some(key_data) = ssh_key {
+        use keepass::db::{Attachment, Value};
+        entry.attachments.insert(
+            "ssh_key".to_string(),
+            Attachment {
+                data: Value::unprotected(key_data.to_vec()),
+            },
+        );
+    }
+
     // Add entry to root group
     db.root.entries.push(entry);
 
     // Save database
-    save_kdbx(&mut db, kdbx_path, keyfile_path, None)?;
+    save_kdbx(&mut db, kdbx_path, kpkey_path, None)?;
 
     Ok(())
 }
 
 /// Delete a key from the KeePass database
-pub fn delete_key(kdbx_path: &Path, keyfile_path: Option<&Path>, domain: &str) -> Result<bool> {
-    let mut db = open_kdbx(kdbx_path, keyfile_path, None)?;
+pub fn delete_key(kdbx_path: &Path, kpkey_path: Option<&Path>, domain: &str) -> Result<bool> {
+    let mut db = open_kdbx(kdbx_path, kpkey_path, None)?;
 
     // Find and remove the entry
     let initial_count = db.root.entries.len();
@@ -391,7 +461,7 @@ pub fn delete_key(kdbx_path: &Path, keyfile_path: Option<&Path>, domain: &str) -
 
     if deleted {
         // Save database
-        save_kdbx(&mut db, kdbx_path, keyfile_path, None)?;
+        save_kdbx(&mut db, kdbx_path, kpkey_path, None)?;
     }
 
     Ok(deleted)
@@ -403,12 +473,28 @@ pub fn delete_key(kdbx_path: &Path, keyfile_path: Option<&Path>, domain: &str) -
 /// Otherwise, a new key will be added.
 pub fn update_key(
     kdbx_path: &Path,
-    keyfile_path: Option<&Path>,
+    kpkey_path: Option<&Path>,
     domain: &str,
     username: &str,
     password: &str,
 ) -> Result<()> {
-    let mut db = open_kdbx(kdbx_path, keyfile_path, None)?;
+    update_key_with_ssh(kdbx_path, kpkey_path, domain, username, password, None, None)
+}
+
+/// Update or add a key with SSH key and notes to the KeePass database
+///
+/// If a key with the same domain exists, it will be replaced.
+/// Otherwise, a new key will be added.
+pub fn update_key_with_ssh(
+    kdbx_path: &Path,
+    kpkey_path: Option<&Path>,
+    domain: &str,
+    username: &str,
+    password: &str,
+    ssh_key: Option<&[u8]>,
+    notes: Option<&str>,
+) -> Result<()> {
+    let mut db = open_kdbx(kdbx_path, kpkey_path, None)?;
 
     // Remove existing entry with same domain (if exists)
     db.root
@@ -442,11 +528,32 @@ pub fn update_key(
         ),
     );
 
+    // Add notes if provided
+    if let Some(notes_text) = notes {
+        if !notes_text.is_empty() {
+            entry.fields.insert(
+                "Notes".to_string(),
+                Value::unprotected(notes_text.to_string()),
+            );
+        }
+    }
+
+    // Add SSH key as binary attachment if provided
+    if let Some(key_data) = ssh_key {
+        use keepass::db::{Attachment, Value};
+        entry.attachments.insert(
+            "ssh_key".to_string(),
+            Attachment {
+                data: Value::unprotected(key_data.to_vec()),
+            },
+        );
+    }
+
     // Add entry to root group
     db.root.entries.push(entry);
 
     // Save database
-    save_kdbx(&mut db, kdbx_path, keyfile_path, None)?;
+    save_kdbx(&mut db, kdbx_path, kpkey_path, None)?;
 
     Ok(())
 }
@@ -463,8 +570,8 @@ mod tests {
         let kdbx_path = get_default_kdbx_path().unwrap();
         assert!(kdbx_path.to_string_lossy().ends_with("key.kdbx"));
 
-        let keyfile_path = get_default_keyfile_path().unwrap();
-        assert!(keyfile_path.to_string_lossy().ends_with("idrsa"));
+        let kpkey_path = get_default_kpkey_path().unwrap();
+        assert!(kpkey_path.to_string_lossy().ends_with("id_ed25519"));
     }
 
     #[test]
@@ -475,9 +582,9 @@ mod tests {
         // Use temp directory for test
         let temp_dir = env::temp_dir();
         let test_kdbx = temp_dir.join("test_keyring.kdbx");
-        let test_keyfile = temp_dir.join("test_keyring.key");
+        let test_kpkey = temp_dir.join("test_keyring.key");
 
-        // Generate test keyfile
+        // Generate test KPKey
         use go_webauthn::*;
         use pollster::block_on;
 
@@ -485,17 +592,17 @@ mod tests {
         let gen_resp = block_on(crypto_ed25519_generate_key(&gen_req));
         assert!(gen_resp.success);
 
-        std::fs::write(&test_keyfile, &gen_resp.private_key).unwrap();
+        std::fs::write(&test_kpkey, &gen_resp.private_key).unwrap();
 
         // Create empty database
         let mut db = Database::new(Default::default());
         db.root.name = KEEPASS_GROUP_NAME.to_string();
-        save_kdbx(&mut db, &test_kdbx, Some(&test_keyfile), None).unwrap();
+        save_kdbx(&mut db, &test_kdbx, Some(&test_kpkey), None).unwrap();
 
         // Add a key
         add_key(
             &test_kdbx,
-            Some(&test_keyfile),
+            Some(&test_kpkey),
             "example.com",
             "user@example.com",
             "secretpass123",
@@ -503,7 +610,7 @@ mod tests {
         .unwrap();
 
         // List keys
-        let keys = list_keys(&test_kdbx, Some(&test_keyfile)).unwrap();
+        let keys = list_keys(&test_kdbx, Some(&test_kpkey)).unwrap();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].domain, "example.com");
         assert_eq!(keys[0].username, "user@example.com");
@@ -512,7 +619,7 @@ mod tests {
         // Try to add duplicate
         let result = add_key(
             &test_kdbx,
-            Some(&test_keyfile),
+            Some(&test_kpkey),
             "example.com",
             "another@example.com",
             "pass",
@@ -520,15 +627,15 @@ mod tests {
         assert!(result.is_err());
 
         // Delete key
-        let deleted = delete_key(&test_kdbx, Some(&test_keyfile), "example.com").unwrap();
+        let deleted = delete_key(&test_kdbx, Some(&test_kpkey), "example.com").unwrap();
         assert!(deleted);
 
         // Verify deletion
-        let keys = list_keys(&test_kdbx, Some(&test_keyfile)).unwrap();
+        let keys = list_keys(&test_kdbx, Some(&test_kpkey)).unwrap();
         assert_eq!(keys.len(), 0);
 
         // Cleanup
         std::fs::remove_file(test_kdbx).ok();
-        std::fs::remove_file(test_keyfile).ok();
+        std::fs::remove_file(test_kpkey).ok();
     }
 }

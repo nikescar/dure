@@ -5,8 +5,9 @@
 use anyhow::{Context, Result};
 use ssh2::Session;
 use std::io::Read;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::time::Duration;
 
 use crate::config::SshHostConfig;
 
@@ -22,8 +23,15 @@ pub fn test_connection(host_config: &SshHostConfig) -> Result<SshConnectionResul
     let (username, hostname) = parse_ssh_host(&host_config.host)?;
     let addr = format!("{}:{}", hostname, host_config.port);
 
-    // Connect to TCP stream
-    let tcp = TcpStream::connect(&addr).context(format!("Failed to connect to {}", addr))?;
+    // Connect to TCP stream with 15 second timeout
+    let timeout = Duration::from_secs(15);
+    let socket_addr = addr.to_socket_addrs()
+        .context(format!("Failed to resolve address: {}", addr))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No address found for {}", addr))?;
+
+    let tcp = TcpStream::connect_timeout(&socket_addr, timeout)
+        .context(format!("Failed to connect to {} (timeout: 15s)", addr))?;
 
     // Create SSH session
     let mut sess = Session::new()?;
@@ -44,8 +52,15 @@ pub fn execute_command(host_config: &SshHostConfig, command: &str) -> Result<Str
     let (username, hostname) = parse_ssh_host(&host_config.host)?;
     let addr = format!("{}:{}", hostname, host_config.port);
 
-    // Connect to TCP stream
-    let tcp = TcpStream::connect(&addr).context(format!("Failed to connect to {}", addr))?;
+    // Connect to TCP stream with 15 second timeout
+    let timeout = Duration::from_secs(15);
+    let socket_addr = addr.to_socket_addrs()
+        .context(format!("Failed to resolve address: {}", addr))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No address found for {}", addr))?;
+
+    let tcp = TcpStream::connect_timeout(&socket_addr, timeout)
+        .context(format!("Failed to connect to {} (timeout: 15s)", addr))?;
 
     // Create SSH session
     let mut sess = Session::new()?;
@@ -203,28 +218,132 @@ fn parse_ssh_host(host: &str) -> Result<(String, String)> {
 
 /// Authenticate SSH session
 fn authenticate(sess: &mut Session, username: &str, host_config: &SshHostConfig) -> Result<()> {
-    // Try public key authentication first if private key is provided
+    let mut attempted_methods = Vec::new();
+    let mut errors = Vec::new();
+
+    // Try keyring authentication first if keyring domain is provided
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(ref keyring_domain) = host_config.keyring_domain {
+        attempted_methods.push("keyring".to_string());
+
+        match load_private_key_from_keyring(keyring_domain, username) {
+            Ok(private_key) => {
+                // Write key to temp file (ssh2 requires file path)
+                use std::io::Write;
+                let temp_dir = std::env::temp_dir();
+                let key_file = temp_dir.join(format!("dure_ssh_{}", uuid::Uuid::new_v4()));
+
+                if let Ok(mut file) = std::fs::File::create(&key_file) {
+                    if file.write_all(private_key.as_bytes()).is_ok() {
+                        // Try to authenticate with the key
+                        let result = sess.userauth_pubkey_file(username, None, &key_file, None);
+
+                        // Clean up temp file
+                        let _ = std::fs::remove_file(&key_file);
+
+                        if result.is_ok() {
+                            return Ok(());
+                        } else if let Err(e) = result {
+                            errors.push(format!("Keyring: {}", e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Keyring: {}", e));
+            }
+        }
+    }
+
+    // Try public key authentication if private key file is provided
     if let Some(ref key_path) = host_config.private_key_path {
+        attempted_methods.push(format!("private key ({})", key_path));
+
         let key_path = Path::new(key_path);
         if key_path.exists() {
-            sess.userauth_pubkey_file(username, None, key_path, None)
-                .context("Public key authentication failed")?;
-            return Ok(());
+            match sess.userauth_pubkey_file(username, None, key_path, None) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    errors.push(format!("Private key: {}", e));
+                }
+            }
+        } else {
+            errors.push(format!("Private key: file not found at '{}'", key_path.display()));
         }
     }
 
     // Try password authentication if password is provided
     if let Some(ref password) = host_config.password {
-        sess.userauth_password(username, password)
-            .context("Password authentication failed")?;
-        return Ok(());
+        attempted_methods.push("password".to_string());
+
+        match sess.userauth_password(username, password) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                errors.push(format!("Password: {}", e));
+            }
+        }
     }
 
     // Try agent authentication as fallback
-    sess.userauth_agent(username)
-        .context("Agent authentication failed. No valid authentication method available.")?;
+    attempted_methods.push("SSH agent".to_string());
 
-    Ok(())
+    match sess.userauth_agent(username) {
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            errors.push(format!("SSH agent: {}", e));
+        }
+    }
+
+    // Build detailed error message
+    let mut error_msg = format!("Authentication failed for {}@host", username);
+
+    if !attempted_methods.is_empty() {
+        error_msg.push_str(&format!("\nAttempted methods: {}", attempted_methods.join(", ")));
+    }
+
+    if !errors.is_empty() {
+        error_msg.push_str("\nErrors:");
+        for err in errors {
+            error_msg.push_str(&format!("\n  - {}", err));
+        }
+    }
+
+    anyhow::bail!(error_msg)
+}
+
+/// Load private key from keyring
+#[cfg(not(target_arch = "wasm32"))]
+fn load_private_key_from_keyring(domain: &str, username: &str) -> Result<String> {
+    use crate::calc::keyring;
+
+    let kdbx_path = keyring::get_default_kdbx_path()
+        .context("Failed to get kdbx path")?;
+    let kpkey_path = keyring::get_default_kpkey_path()
+        .context("Failed to get KPKey path")?;
+
+    let keys = keyring::list_keys(&kdbx_path, Some(&kpkey_path))
+        .context("Failed to list keys from keyring")?;
+
+    // Find the key with matching domain and username
+    let key_entry = keys.iter()
+        .find(|k| k.domain == domain && k.username == username)
+        .ok_or_else(|| anyhow::anyhow!("Key not found in keyring for domain '{}' and username '{}'", domain, username))?;
+
+    // Try to get SSH key from binary attachment first
+    if let Some(ssh_key_bytes) = &key_entry.ssh_key {
+        // Convert bytes to string (SSH private keys are text)
+        let private_key_str = String::from_utf8(ssh_key_bytes.clone())
+            .context("SSH key is not valid UTF-8")?;
+
+        Ok(private_key_str)
+    } else {
+        // Fallback to password field (for backward compatibility or if stored as text)
+        if !key_entry.password.is_empty() {
+            Ok(key_entry.password.clone())
+        } else {
+            anyhow::bail!("No SSH key found in keyring entry. Please store the SSH private key as a binary attachment named 'ssh_key'.")
+        }
+    }
 }
 
 #[cfg(test)]

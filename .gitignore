@@ -99,6 +99,10 @@ Temporary Items
 .claude
 .config
 
+# Environment variables (OAuth credentials)
+.env
+.env.local
+
 # Snap packaging
 prime/
 stage/

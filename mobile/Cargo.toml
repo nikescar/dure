@@ -185,6 +185,7 @@ tempfile = "3.27"
 
 [build-dependencies]
 winres = "0.1.12"
+dotenvy = "0.15"
 
 [lints]
 workspace = true

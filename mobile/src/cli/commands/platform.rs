@@ -46,12 +46,7 @@ pub fn execute_platform_status() -> Result<()> {
         // Show details based on platform type
         match platform.platform_type.as_str() {
             "gcp" => {
-                if let Some(project_id) = &platform.gcp_project_id {
-                    println!("  └─ Project: {}", project_id);
-                }
-                if let Some(region) = &platform.gcp_region {
-                    println!("  └─ Region: {}", region);
-                }
+                // GCP details are now in VMs
             }
             "firebase" => {
                 if let Some(project_id) = &platform.firebase_project_id {
@@ -98,14 +93,10 @@ pub fn execute_platform_add(name: String, platform_type: String) -> Result<()> {
     let platform = CloudPlatformConfig {
         name: name.clone(),
         platform_type: platform_type.clone(),
-        gcp_project_id: None,
-        gcp_billing_account: None,
-        gcp_region: None,
-        gcp_oauth_client_id: None,
-        gcp_oauth_client_secret: None,
         gcp_oauth_access_token: None,
         gcp_oauth_refresh_token: None,
         gcp_oauth_token_expiry: None,
+        gcp_connected_email: None,
         firebase_project_id: None,
         firebase_api_key: None,
         supabase_project_ref: None,
@@ -113,6 +104,7 @@ pub fn execute_platform_add(name: String, platform_type: String) -> Result<()> {
         supabase_anon_key: None,
         api_token: None,
         service_account_json: None,
+        vms: Vec::new(),
     };
 
     // Add to config

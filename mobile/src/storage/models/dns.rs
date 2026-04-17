@@ -67,7 +67,7 @@ pub fn get_cached_dns_records(
             "A" => RecordType::A,
             "AAAA" => RecordType::AAAA,
             "TXT" => RecordType::TXT,
-            "SSHFP" => RecordType::SSHFP,
+            "NS" => RecordType::NS,
             _ => continue,
         };
 

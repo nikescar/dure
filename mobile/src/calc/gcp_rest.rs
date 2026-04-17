@@ -245,6 +245,39 @@ impl GcpRestClient {
         }
     }
 
+    /// Wait for a global operation to complete (for firewall, network operations)
+    ///
+    /// API: GET /projects/{project}/global/operations/{operation}
+    pub fn wait_for_global_operation(
+        &self,
+        project_id: &str,
+        operation_name: &str,
+    ) -> Result<Operation> {
+        let timeout_secs = 120; // 2 minutes
+        let url = format!(
+            "{}/projects/{}/global/operations/{}",
+            GCP_COMPUTE_API_BASE, project_id, operation_name
+        );
+
+        let start = std::time::Instant::now();
+
+        loop {
+            let response = self.get(&url)?;
+            let operation: Operation = response.into_json()?;
+
+            if operation.is_done() {
+                return Ok(operation);
+            }
+
+            if start.elapsed().as_secs() > timeout_secs {
+                return Err(anyhow::anyhow!("Operation timed out"));
+            }
+
+            // Poll every 2 seconds
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+
     /// List available regions
     ///
     /// API: GET /projects/{project}/regions
@@ -453,6 +486,14 @@ impl GcpRestClient {
         }
 
         let info: ProjectBillingInfo = response.into_json()?;
+        Ok(info)
+    }
+
+    /// Get user info from OAuth2 userinfo endpoint
+    pub fn get_user_info(&self) -> Result<UserInfo> {
+        let url = "https://www.googleapis.com/oauth2/v2/userinfo";
+        let response = self.get(url)?;
+        let info: UserInfo = response.into_json()?;
         Ok(info)
     }
 }
@@ -682,6 +723,17 @@ pub struct Project {
     pub labels: std::collections::HashMap<String, String>,
 }
 
+/// OAuth2 user info response
+#[derive(Debug, Deserialize)]
+pub struct UserInfo {
+    pub email: Option<String>,
+    pub verified_email: Option<bool>,
+    pub name: Option<String>,
+    pub given_name: Option<String>,
+    pub family_name: Option<String>,
+    pub picture: Option<String>,
+}
+
 // ============================================================================
 // Cloud Billing Types
 // ============================================================================
@@ -784,7 +836,11 @@ impl InstanceRequest {
                 }]),
             }],
             tags: Some(Tags {
-                items: vec!["http-server".to_string(), "https-server".to_string()],
+                items: vec![
+                    "dure".to_string(),          // Dure firewall rule
+                    "http-server".to_string(),   // Allow HTTP
+                    "https-server".to_string(),  // Allow HTTPS
+                ],
             }),
             metadata: None,
         }
@@ -808,6 +864,290 @@ impl Instance {
             .first()
             .and_then(|ni| ni.network_ip.clone())
     }
+}
+
+// ============================================================================
+// Firewall API
+// ============================================================================
+
+/// Firewall rule request
+#[derive(Debug, Serialize)]
+pub struct FirewallRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(rename = "direction")]
+    pub direction: String, // "INGRESS" or "EGRESS"
+    pub priority: u32,
+    #[serde(rename = "targetTags")]
+    pub target_tags: Vec<String>,
+    pub allowed: Vec<FirewallAllowed>,
+    #[serde(rename = "sourceRanges")]
+    pub source_ranges: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FirewallAllowed {
+    #[serde(rename = "IPProtocol")]
+    pub ip_protocol: String, // "tcp", "udp", "icmp", "all"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<String>>,
+}
+
+/// Firewall list response
+#[derive(Debug, Deserialize)]
+pub struct ListFirewallsResponse {
+    pub items: Option<Vec<Firewall>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Firewall {
+    pub name: String,
+    #[serde(rename = "targetTags")]
+    pub target_tags: Option<Vec<String>>,
+}
+
+impl GcpRestClient {
+    /// List firewalls with optional filter
+    pub fn list_firewalls(
+        &self,
+        project_id: &str,
+        filter_name: Option<&str>,
+    ) -> Result<ListFirewallsResponse> {
+        let mut url = format!("{}/projects/{}/global/firewalls", GCP_COMPUTE_API_BASE, project_id);
+
+        if let Some(name) = filter_name {
+            url.push_str(&format!("?filter=name%3D{}", urlencoding::encode(name)));
+        }
+
+        let response = self.get(&url)?;
+        Ok(response.into_json()?)
+    }
+
+    /// Create a firewall rule
+    pub fn create_firewall(
+        &self,
+        project_id: &str,
+        firewall_data: &FirewallRequest,
+    ) -> Result<Operation> {
+        let url = format!("{}/projects/{}/global/firewalls", GCP_COMPUTE_API_BASE, project_id);
+
+        let response = ureq::post(&url)
+            .set("Authorization", &format!("Bearer {}", self.access_token))
+            .set("Content-Type", "application/json")
+            .send_json(firewall_data)?;
+
+        let operation: Operation = response.into_json()?;
+
+        // Wait for global operation to complete
+        self.wait_for_global_operation(project_id, &operation.name)
+    }
+
+    /// List BigQuery datasets
+    pub fn list_bigquery_datasets(&self, project_id: &str) -> Result<Vec<String>> {
+        let url = format!(
+            "https://bigquery.googleapis.com/bigquery/v2/projects/{}/datasets",
+            project_id
+        );
+
+        let response = self.get(&url)?;
+        let body: serde_json::Value = response.into_json()?;
+
+        let mut datasets = Vec::new();
+        if let Some(dataset_list) = body["datasets"].as_array() {
+            for dataset in dataset_list {
+                if let Some(dataset_id) = dataset["datasetReference"]["datasetId"].as_str() {
+                    datasets.push(dataset_id.to_string());
+                }
+            }
+        }
+        Ok(datasets)
+    }
+
+    /// List BigQuery tables in a dataset
+    pub fn list_bigquery_tables(&self, project_id: &str, dataset_id: &str) -> Result<Vec<String>> {
+        let url = format!(
+            "https://bigquery.googleapis.com/bigquery/v2/projects/{}/datasets/{}/tables",
+            project_id, dataset_id
+        );
+
+        let response = self.get(&url)?;
+        let body: serde_json::Value = response.into_json()?;
+
+        let mut tables = Vec::new();
+        if let Some(table_list) = body["tables"].as_array() {
+            for table in table_list {
+                if let Some(table_id) = table["tableReference"]["tableId"].as_str() {
+                    tables.push(table_id.to_string());
+                }
+            }
+        }
+        Ok(tables)
+    }
+
+    /// Auto-discover billing export table
+    pub fn discover_billing_table(&self, project_id: &str) -> Result<(String, String)> {
+        // List all datasets
+        let datasets = self.list_bigquery_datasets(project_id)?;
+
+        // Look for billing-related datasets
+        for dataset in datasets {
+            if dataset.contains("billing") || dataset.contains("export") {
+                // List tables in this dataset
+                if let Ok(tables) = self.list_bigquery_tables(project_id, &dataset) {
+                    // Look for gcp_billing_export_v1_* table
+                    for table in tables {
+                        if table.starts_with("gcp_billing_export_v1_") {
+                            return Ok((dataset, table));
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "No billing export table found. Please configure billing export in GCP Console."
+        ))
+    }
+
+    /// Query BigQuery for billing data
+    pub fn query_bigquery(&self, project_id: &str, query: &str) -> Result<BigQueryResponse> {
+        let url = format!(
+            "https://bigquery.googleapis.com/bigquery/v2/projects/{}/queries",
+            project_id
+        );
+
+        let request = serde_json::json!({
+            "query": query,
+            "useLegacySql": false,
+            "maxResults": 10000
+        });
+
+        let response = self.post(&url, &request.to_string())?;
+
+        // Check for HTTP error status
+        let status = response.status();
+        let body_text = response.into_string()?;
+
+        if status != 200 {
+            // Try to parse error message from response
+            if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                if let Some(error_msg) = error_json["error"]["message"].as_str() {
+                    return Err(anyhow::anyhow!("BigQuery API error: {}", error_msg));
+                }
+            }
+            return Err(anyhow::anyhow!("BigQuery API error (HTTP {}): {}", status, body_text));
+        }
+
+        // Parse successful response
+        let result: BigQueryResponse = serde_json::from_str(&body_text)?;
+        Ok(result)
+    }
+
+    /// Get billing data for the current month
+    pub fn get_current_month_billing(
+        &self,
+        project_id: &str,
+        dataset_id: &str,
+        table_id: &str,
+    ) -> Result<Vec<BillingRecord>> {
+        // Get current month in YYYYMM format
+        let now = chrono::Utc::now();
+        let invoice_month = now.format("%Y%m").to_string();
+        let first_day_of_month = now.format("%Y-%m-01").to_string();
+
+        let query = format!(
+            r#"
+            SELECT
+              DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS Day,
+              service.description AS Service,
+              SUM(CAST(cost_at_list AS NUMERIC)) AS ListCost,
+              SUM(CAST(cost AS NUMERIC)) - SUM(CAST(cost_at_list AS NUMERIC)) AS NegotiatedSavings,
+              SUM(IFNULL((SELECT SUM(CAST(c.amount AS numeric)) FROM UNNEST(credits) c WHERE c.type IN ('SUSTAINED_USAGE_DISCOUNT', 'DISCOUNT', 'SPENDING_BASED_DISCOUNT', 'COMMITTED_USAGE_DISCOUNT', 'FREE_TIER', 'COMMITTED_USAGE_DISCOUNT_DOLLAR_BASE', 'SUBSCRIPTION_BENEFIT', 'RESELLER_MARGIN')), 0)) AS Discounts,
+              SUM(IFNULL((SELECT SUM(CAST(c.amount AS numeric)) FROM UNNEST(credits) c WHERE c.type IN ('CREDIT_TYPE_UNSPECIFIED', 'PROMOTION')), 0)) AS Promotions,
+              SUM(CAST(cost_at_list AS NUMERIC)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS numeric)) FROM UNNEST(credits) c WHERE c.type IN ('SUSTAINED_USAGE_DISCOUNT', 'DISCOUNT', 'SPENDING_BASED_DISCOUNT', 'COMMITTED_USAGE_DISCOUNT', 'FREE_TIER', 'COMMITTED_USAGE_DISCOUNT_DOLLAR_BASE', 'SUBSCRIPTION_BENEFIT', 'RESELLER_MARGIN')), 0)) + SUM(CAST(cost AS NUMERIC)) - SUM(CAST(cost_at_list AS NUMERIC))+ SUM(IFNULL((SELECT SUM(CAST(c.amount AS numeric)) FROM UNNEST(credits) c WHERE c.type IN ('CREDIT_TYPE_UNSPECIFIED', 'PROMOTION')), 0)) AS Subtotal
+            FROM
+              `{}.{}.{}`
+            WHERE
+              invoice.month = '{}' AND
+              DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) >= '{}'
+            GROUP BY
+              Day,
+              service.description
+            ORDER BY
+              Day DESC,
+              Subtotal DESC
+            "#,
+            project_id, dataset_id, table_id, invoice_month, first_day_of_month
+        );
+
+        let response = self.query_bigquery(project_id, &query)?;
+
+        let mut records = Vec::new();
+        if let Some(rows) = response.rows {
+            for row in rows {
+                if row.f.len() >= 7 {
+                    records.push(BillingRecord {
+                        day: row.f[0].v.clone().unwrap_or_default(),
+                        service: row.f[1].v.clone().unwrap_or_default(),
+                        list_cost: row.f[2].v.clone().unwrap_or_default().parse().unwrap_or(0.0),
+                        negotiated_savings: row.f[3].v.clone().unwrap_or_default().parse().unwrap_or(0.0),
+                        discounts: row.f[4].v.clone().unwrap_or_default().parse().unwrap_or(0.0),
+                        promotions: row.f[5].v.clone().unwrap_or_default().parse().unwrap_or(0.0),
+                        subtotal: row.f[6].v.clone().unwrap_or_default().parse().unwrap_or(0.0),
+                    });
+                }
+            }
+        }
+
+        Ok(records)
+    }
+}
+
+// BigQuery API response types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BigQueryResponse {
+    pub kind: String,
+    pub schema: Option<BigQuerySchema>,
+    pub rows: Option<Vec<BigQueryRow>>,
+    #[serde(rename = "totalRows")]
+    pub total_rows: Option<String>,
+    #[serde(rename = "jobComplete")]
+    pub job_complete: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BigQuerySchema {
+    pub fields: Vec<BigQueryField>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BigQueryField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BigQueryRow {
+    pub f: Vec<BigQueryCell>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BigQueryCell {
+    pub v: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BillingRecord {
+    pub day: String,
+    pub service: String,
+    pub list_cost: f64,
+    pub negotiated_savings: f64,
+    pub discounts: f64,
+    pub promotions: f64,
+    pub subtotal: f64,
 }
 
 #[cfg(test)]

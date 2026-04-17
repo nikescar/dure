@@ -1,662 +1,104 @@
-name: Build and Release
+name: Build Release
 
 on:
   push:
     tags:
-      - v*
-    branches:
-      - test
+      - 'v*'
   workflow_dispatch:
 
-env:
-  RUST_VERSION: 1.86.0
-  BIN_NAME: "dure-desktop"
-  WASM_BIN_NAME: "dure"
-
 jobs:
-  build:
-    name: Build - ${{ matrix.platform.name }}
-    # By default, runs on Ubuntu, otherwise, override with the desired os
-    runs-on: ${{ matrix.platform.os || 'ubuntu-22.04' }}
-    strategy:
-      matrix:
-        # Set platforms you want to build your binaries on
-        platform:
-          # Linux
-          - name: Linux x86_64
-            target: x86_64-unknown-linux-musl
-            build-args: "--release"
-
-          - name: Linux x86
-            target: i686-unknown-linux-musl
-            build-args: "--release"
-
-          - name: Linux aarch64
-            target: aarch64-unknown-linux-musl
-            build-args: "--release"
-
-          - name: Linux armv7hf
-            target: armv7-unknown-linux-musleabihf
-            build-args: "--release"
-
-          - name: Linux armv6
-            target: arm-unknown-linux-musleabihf
-            build-args: "--release"
-          
-          # even libgtk-3-dev has installed, The system library `gdk-3.0` required by crate `gdk-sys` was not found. not resolved.
-          # - name: Freebsd x86_64
-          #   target: x86_64-unknown-freebsd
-          #   build-args: "--release"
-
-          # - name: Freebsd x86
-          #   target: i686-unknown-freebsd
-          #   build-args: "--release"
-
-          - name: Android aarch64
-            target: aarch64-linux-android
-            build-args: "--release"
-
-          - name: Android APK arm64
-            target: aarch64-linux-android
-            build-args: "--release"
-
-          - name: Android armv7
-            target: armv7-linux-androideabi
-            build-args: "--release"
-
-          #- name: Linux mips
-          #  target: mips-unknown-linux-musl
-
-          #- name: Linux mips64
-          #  target: mips64-unknown-linux-muslabi64
-
-          # Mac OS
-          - name: MacOS x86_64
-            os: macos-latest
-            target: x86_64-apple-darwin
-            build-args: "--release"
-
-          - name: MacOS aarch64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            build-args: "--release"
-
-          # - name: iOS x86_64
-          #   target: x86_64-apple-ios
-
-          #- name: iOS aarch64
-          #  target: aarch64-apple-ios
-
-          # Windows
-          - name: Windows x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            build-args: "--profile release-with-symbols"
-
-          # - name: Windows x86
-          #   os: windows-latest
-          #   target: i686-pc-windows-msvc
-          #   build-args: "--profile release-with-symbols"
-
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
-      - name: Linux - Install Build Dependencies
-        if: contains(matrix.platform.target, 'linux')
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools libgtk-3-dev libxdo-dev libappindicator3-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libwayland-dev libcairo2-dev libpixman-1-dev libpango1.0-dev libxdo-dev librust-glib-sys-dev librust-gio-sys-dev librust-gobject-sys-dev librust-gdk-sys-dev libwebkit2gtk-4.1-dev librust-gdk-pixbuf-sys-dev librust-cairo-sys-rs-dev librust-pango-sys-dev librust-atk-sys-dev libgdk-pixbuf2.0-dev libatk1.0-dev musl-dev
-          export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-musl/pkgconfig"
-          
-      - name: Android - Install Build Dependencies
-        if: contains(matrix.platform.target, 'android')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y android-libunwind android-libunwind-dev libunwind-dev musl-tools llvm-14 clang llvm
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - name: Update Version from Git Tag
-        shell: bash
-        run: |
-          # Extract version from git tag (remove 'v' prefix if present)
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
-            echo "Detected version: $VERSION"
-            # Update version in Cargo.toml (compatible with both GNU and BSD sed)
-            sed -i.bak "s/^version = .*/version = \"$VERSION\"/" ./Cargo.toml && rm -f ./Cargo.toml.bak
-            echo "Updated Cargo.toml with version $VERSION"
-            grep "^version = " ./Cargo.toml
-          else
-            echo "Not a tag build, skipping version update"
-            VERSION=$(git describe --tags --always --dirty)
-            echo "Build version: $VERSION"
-          fi
-      
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: ${{ matrix.platform.target }}
-          components: rustfmt, clippy
-
-      - name: Android - Install Cross-Compilation Tool
-        if: contains(matrix.platform.target, 'android')
-        run: | 
-          cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Android - Build Release APK
-        if: (contains(matrix.platform.name, 'Android APK arm64'))
-        run: | 
-          echo "storePassword=${{ secrets.STORE_PASSWORD }}" > ./mobile/app/keystore.properties
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> ./mobile/app/keystore.properties
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> ./mobile/app/keystore.properties
-          echo "storeFile=release.keystore" >> ./mobile/app/keystore.properties
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > ./mobile/app/release.keystore
-          echo "${{ secrets.STORE_PASSWORD }}" | keytool -list -v -keystore $PWD/mobile/app/release.keystore
-
-          pushd mobile
-          bash ./build.gh.sh
-          
-          # Verify outputs
-          echo "=== Listing APK outputs ==="
-          ls -alh ./app/build/outputs/apk/release/ || echo "APK directory not found"
-          echo "=== Listing AAB outputs ==="
-          ls -alh ./app/build/outputs/bundle/release/ || echo "AAB directory not found"
-          
-          # Copy APK for artifact upload
-          cp ./app/build/outputs/apk/release/app-release.apk ./app/build/outputs/apk/release/dure-all-signed.apk
-          # Copy AAB for artifact upload
-          cp ./app/build/outputs/bundle/release/app-release.aab ./app/build/outputs/apk/release/dure-all.aab
-          popd
-
-      - name: Build Binary for ${{ matrix.platform.name }}
-        if: (contains(matrix.platform.target, 'x86_64') || contains(matrix.platform.target, 'aarch64') || contains(matrix.platform.target, 'armv7')) && !contains(matrix.platform.name, 'Android APK arm64')
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: ${{ matrix.platform.build-args }} --package dure
-
-      - name: Windows - Code Signing
-        if: (contains(matrix.platform.target, 'windows') && env.WINDOWS_CERT_P12_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != '')
-        id: sign_exe
+      - name: Build release binary
         env:
-          WINDOWS_CERT_P12_BASE64: ${{ secrets.WINDOWS_CERT_P12_BASE64 }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        shell: pwsh
-        run: |
-          # Decode the certificate
-          $certBytes = [System.Convert]::FromBase64String($env:WINDOWS_CERT_P12_BASE64)
-          [System.IO.File]::WriteAllBytes("windows.pfx", $certBytes)
-
-          # Verify the executable exists
-          echo "Checking for build output..."
-          Get-ChildItem -Path target -Recurse -Filter "*.exe" | Format-Table FullName
-
-          $EXE_PATH = "target/release-with-symbols/dure-desktop.exe"
-          if (-Not (Test-Path $EXE_PATH)) {
-            echo "::error:: Executable not found at $EXE_PATH"
-            echo "Listing target directory contents:"
-            Get-ChildItem -Path target -Recurse | Format-Table FullName
-            exit 1
-          }
-          echo "Signing $EXE_PATH..."
-
-          # Find signtool.exe (it's part of the Windows SDK)
-          $SIGNTOOL_PATH = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse | Sort-Object VersionInfo -Descending | Select-Object -First 1).FullName
-          if ($null -eq $SIGNTOOL_PATH) {
-            echo "::error:: signtool.exe not found."
-            exit 1
-          }
-          echo "Using signtool at $SIGNTOOL_PATH"
-
-          # Sign the file
-          & $SIGNTOOL_PATH sign /f "windows.pfx" /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 $EXE_PATH
-
-          # Clean up
-          Remove-Item windows.pfx
-
-      - name: Upload Binary Artifact
-        if: (!contains(matrix.platform.name, 'Android APK arm64'))
-        uses: actions/upload-artifact@v4
-        with:
-          # Finally, we store the binary as GitHub artifact for later usage
-          name: dure-${{ matrix.platform.target }}
-          path: target/release${{ contains(matrix.platform.target, 'windows') && '-with-symbols' || '' }}/dure-desktop*
-          retention-days: 1
-
-      - name: Android - Upload APK Artifact
-        if: (contains(matrix.platform.name, 'Android APK arm64'))
-        uses: actions/upload-artifact@v4
-        with:
-          name: dure-all-signed.apk
-          path: ./mobile/app/build/outputs/apk/release/dure-all-signed.apk
-          retention-days: 1
-
-      - name: Android - Upload AAB Artifact
-        if: (contains(matrix.platform.name, 'Android APK arm64'))
-        uses: actions/upload-artifact@v4
-        with:
-          name: dure-all.aab
-          path: ./mobile/app/build/outputs/apk/release/dure-all.aab
-          retention-days: 1
-
-  build-wasm:
-    name: Build WASM
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - name: Update Version from Git Tag
-        shell: bash
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
-            echo "Detected version: $VERSION"
-            sed -i.bak "s/^version = .*/version = \"$VERSION\"/" ./Cargo.toml && rm -f ./Cargo.toml.bak
-            echo "Updated Cargo.toml with version $VERSION"
-            grep "^version = " ./Cargo.toml
-          else
-            echo "Not a tag build, skipping version update"
-            VERSION=$(git describe --tags --always --dirty)
-            echo "Build version: $VERSION"
-          fi
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
-
-      - name: Install Trunk
-        run: cargo install --locked trunk
-
-      - name: Build WASM
+          # OAuth credentials from GitHub Secrets
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           cd mobile
-          bash ./build.wasm.sh
-          echo "=== WASM Build Complete ==="
-          ls -lah ./dist/
+          cargo build --release --bin dure-desktop
 
-      - name: Prepare WASM Release Package
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dure-desktop-linux
+          path: mobile/target/release/dure-desktop
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        env:
+          # OAuth credentials from GitHub Secrets
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
-          cd mobile/dist
-          # Copy license files
-          cp ../../LICENSE-MIT .
-          cp ../../LICENSE-Apache-2.0 .
-          # Create zip without directory paths (all files in root)
-          zip -j dure-wasm.zip *.wasm *.js *.html sw.js LICENSE-MIT LICENSE-Apache-2.0
-          ls -lah dure-wasm.zip
+          cd mobile
+          cargo build --release --bin dure-desktop
 
-      - name: Upload WASM Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dure-wasm
-          path: mobile/dist/dure-wasm.zip
-          retention-days: 1
+          name: dure-desktop-windows
+          path: mobile/target/release/dure-desktop.exe
 
-      - name: Upload Individual WASM Files for Attestation
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        env:
+          # OAuth credentials from GitHub Secrets
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: |
+          cd mobile
+          cargo build --release --bin dure-desktop
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dure-wasm-files
-          path: |
-            mobile/dist/*.wasm
-            mobile/dist/*.js
-          retention-days: 1
+          name: dure-desktop-macos
+          path: mobile/target/release/dure-desktop
 
-  attest-binaries:
-    name: Attest Binaries
-    needs: [ build, build-wasm ]
-    runs-on: ubuntu-22.04
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
+  create-release:
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4.1.7
-        with:
-          path: artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
 
-      - name: Attest Linux x86_64
-        uses: actions/attest@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          subject-path: 'artifacts/dure-x86_64-unknown-linux-musl/dure-desktop'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest Linux aarch64
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-aarch64-unknown-linux-musl/dure-desktop'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest MacOS x86_64
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-x86_64-apple-darwin/dure-desktop'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest MacOS aarch64
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-aarch64-apple-darwin/dure-desktop'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest Windows x86_64
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-x86_64-pc-windows-msvc/dure-desktop.exe'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest Android APK
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-all-signed.apk/dure-all-signed.apk'
-          predicate-type: 'https://dure.io/attestation/binary/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-      - name: Attest WASM Binary
-        uses: actions/attest@v4
-        with:
-          subject-path: 'artifacts/dure-wasm-files/*.wasm'
-          predicate-type: 'https://dure.io/attestation/wasm/v1'
-          predicate: |
-            {
-              "buildType": "https://github.com/actions/runner",
-              "builder": {
-                "id": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              }
-            }
-
-  release:
-    name: Release
-    needs: [ build, build-wasm, attest-binaries ]
-    # We run the release job only if a tag starts with 'v' letter
-    if: startsWith( github.ref, 'refs/tags/v' )
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      # Download all artifacts
-      - uses: actions/download-artifact@v4.1.7
-        with:
-          path: artifacts
-
-      - name: VirusTotal Scan
-        id: vt_scan
-        continue-on-error: true
-        uses: crazy-max/ghaction-virustotal@v4
-        with:
-          vt_api_key: ${{ secrets.VT_API_KEY }}
-          update_release_body: false
-          request_rate: 4
           files: |
-            ./artifacts/dure-aarch64-apple-darwin/dure-desktop
-            ./artifacts/dure-aarch64-linux-android/dure-desktop
-            ./artifacts/dure-aarch64-unknown-linux-musl/dure-desktop
-            ./artifacts/dure-all-signed.apk/dure-all-signed.apk
-            ./artifacts/dure-armv7-linux-androideabi/dure-desktop
-            ./artifacts/dure-armv7-unknown-linux-musleabihf/dure-desktop
-            ./artifacts/dure-x86_64-apple-darwin/dure-desktop
-            ./artifacts/dure-x86_64-unknown-linux-musl/dure-desktop
-            ./artifacts/dure-x86_64-pc-windows-msvc/dure-desktop.exe
-            ./artifacts/dure-wasm/dure-wasm.zip
-
-      - name: Parse Analysis Results
-        id: parse_results
-        run: |
-          # Extract changelog from CHANGELOG.md (first "What's Changed" section only)
-          CHANGELOG_CONTENT=""
-          if [ -f "CHANGELOG.md" ]; then
-            echo "Extracting changelog from CHANGELOG.md..."
-
-            # Read the first "What's Changed" section
-            # Stop at the next "##" heading or end of file
-            CHANGELOG_RAW=$(awk '
-              /^## What'\''s Changed$/ { in_section=1; next }
-              in_section && /^##/ { exit }
-              in_section && NF { print }
-            ' CHANGELOG.md)
-
-            # Process changelog: remove "by @username" and deduplicate
-            if [ -n "$CHANGELOG_RAW" ]; then
-              # Remove "by @username" pattern and deduplicate lines
-              CHANGELOG_CONTENT=$(echo "$CHANGELOG_RAW" | \
-                sed -E 's/ by @[a-zA-Z0-9_-]+//g' | \
-                awk '!seen[$0]++')
-
-              echo "Processed changelog:"
-              echo "$CHANGELOG_CONTENT"
-            fi
-          fi
-
-          # Get the analysis output from previous step
-          ANALYSIS="${{ steps.vt_scan.outputs.analysis }}"
-
-          echo "Raw analysis output:"
-          echo "$ANALYSIS"
-
-          # Parse the analysis output and format for release notes
-          # Format: file1=url1,file2=url2,...
-
-          VT_RESULTS=""
-
-          # Check if we have any results
-          if [ -z "$ANALYSIS" ]; then
-            echo "Warning: No analysis output from VirusTotal scan"
-            VT_RESULTS="⚠️ VirusTotal scan encountered errors. Some files may have been scanned previously (409 error)."
-          else
-            # Split by comma and process each entry
-            IFS=',' read -ra ENTRIES <<< "$ANALYSIS"
-            for entry in "${ENTRIES[@]}"; do
-              # Skip empty entries
-              if [ -z "$entry" ]; then
-                continue
-              fi
-
-              # Split by = to get file and URL
-              IFS='=' read -r file url <<< "$entry"
-
-              # Skip if file or url is empty
-              if [ -z "$file" ] || [ -z "$url" ]; then
-                continue
-              fi
-
-              # Extract identifier from path
-              # For .exe and .apk files, use the filename
-              # For other files (binaries), use the parent directory name which contains platform info
-              if [[ "$file" == *.exe ]] || [[ "$file" == *.apk ]]; then
-                identifier=$(basename "$file")
-              else
-                identifier=$(basename "$(dirname "$file")")
-              fi
-
-              # Build markdown link
-              VT_RESULTS="${VT_RESULTS}- **${identifier}**: [View VirusTotal Report](${url})\n"
-            done
-
-            # Check if we have formatted results
-            if [ -z "$VT_RESULTS" ]; then
-              echo "Warning: No valid results to format"
-              VT_RESULTS="⚠️ No scan results available. Files may have been scanned recently."
-            fi
-          fi
-
-          # Combine changelog and VirusTotal results
-          FORMATTED_RESULTS=""
-
-          if [ -n "$CHANGELOG_CONTENT" ]; then
-            FORMATTED_RESULTS="${FORMATTED_RESULTS}## What's Changed\n${CHANGELOG_CONTENT}\n\n"
-          fi
-
-          FORMATTED_RESULTS="${FORMATTED_RESULTS}## VirusTotal Scan Results\n${VT_RESULTS}"
-
-          # Save to output (escape for GitHub Actions)
-          echo "formatted_results<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$FORMATTED_RESULTS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          echo "Formatted results:"
-          echo -e "$FORMATTED_RESULTS"
-
-      - name: Prepare Release Artifacts
-        run: |
-          find artifacts/
-          mkdir distbin/
-
-          # Handle WASM zip
-          if [ -f "artifacts/dure-wasm/dure-wasm.zip" ]; then
-            cp artifacts/dure-wasm/dure-wasm.zip distbin/dure-wasm.zip
-          fi
-
-          for i in ./artifacts/*
-          do
-              if [ -d "$i" ]
-              then
-                  # Skip WASM artifacts (already handled)
-                  [[ "$i" == *"dure-wasm"* ]] && continue
-                  [[ "$i" == *"dure-wasm-files"* ]] && continue
-
-                  # Handle APK separately
-                  [[ "$i" == *"dure-all-signed.apk"* ]] && cp artifacts/dure-all-signed.apk/dure-all-signed.apk distbin/dure-all-signed.apk && continue
-
-                  # Handle Windows executables - copy directly without compression
-                  if [[ "$i" == *"windows"* ]]; then
-                      cp "$i"/*.exe distbin/ 2>/dev/null || true
-                      continue
-                  fi
-
-                  # Handle other platforms - tar compress
-                  cp LICENSE* "$i"
-                  cp README.md "$i"
-                  rm "$i/dure-desktop.d" 1>/dev/null 2>&1 || true
-                  chmod +x "$i/dure-desktop" 1>/dev/null 2>&1 || true
-                  tar -cvpzf "${i}.tar.gz" --directory=${i} .
-              fi
-          done
-          cp artifacts/*.tar.gz distbin/ 2>/dev/null || true
-        
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
-        with:
-          tag_name: ${{ github.ref_name }}
-          fail_on_unmatched_files: true
-          # draft: true
-          make_latest: true
-          files: distbin/*
-          body: ${{ steps.parse_results.outputs.formatted_results }}
-          token: ${{ secrets.RELEASE_TOKEN }}
+            dure-desktop-linux/dure-desktop
+            dure-desktop-windows/dure-desktop.exe
+            dure-desktop-macos/dure-desktop
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

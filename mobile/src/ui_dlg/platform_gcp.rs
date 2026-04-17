@@ -14,9 +14,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::gcp_oauth::{OAuthHandler, OAuthResult};
 use crate::calc::gcp::{Instance, MachineType, Region, get_common_machine_types};
-use crate::calc::gcp_rest::{GcpRestClient, InstanceRequest};
+use crate::calc::gcp_rest::{GcpRestClient, InstanceRequest, Metadata, MetadataItem};
 use crate::calc::keyring;
 use crate::config::{AppConfig, CloudPlatformConfig};
+
+#[cfg(not(target_arch = "wasm32"))]
+use base64::Engine;
 
 /// GCP wizard state machine
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -102,6 +105,13 @@ pub struct GcpWizard {
 
     /// Show wizard dialog
     show: bool,
+
+    /// Available platforms with GCP connection
+    #[cfg_attr(feature = "serde", serde(skip))]
+    available_platforms: Vec<CloudPlatformConfig>,
+
+    /// Selected platform email for VM creation
+    selected_platform_email: String,
 }
 
 impl Default for GcpWizard {
@@ -130,6 +140,8 @@ impl Default for GcpWizard {
             create_promise: None,
             progress_log: Vec::new(),
             show: false,
+            available_platforms: Vec::new(),
+            selected_platform_email: String::new(),
         }
     }
 }
@@ -144,36 +156,9 @@ impl GcpWizard {
         }
     }
 
-    /// Load OAuth from config if exists
-    pub fn load_oauth_from_config(&mut self, config: &AppConfig) {
-        // Find GCP platform config
-        if let Some(gcp_config) = config.platforms.iter().find(|p| p.platform_type == "gcp") {
-            if let (Some(access_token), Some(refresh_token)) = (
-                &gcp_config.gcp_oauth_access_token,
-                &gcp_config.gcp_oauth_refresh_token,
-            ) {
-                // Check if token is expired
-                let now = chrono::Utc::now().timestamp();
-                let expired = gcp_config
-                    .gcp_oauth_token_expiry
-                    .map(|expiry| now >= expiry)
-                    .unwrap_or(true);
-
-                if !expired {
-                    // Token still valid, use it
-                    self.oauth_result = Some(OAuthResult {
-                        access_token: access_token.clone(),
-                        refresh_token: refresh_token.clone(),
-                        expires_at: gcp_config
-                            .gcp_oauth_token_expiry
-                            .map(|exp| exp as u64)
-                            .unwrap_or(chrono::Utc::now().timestamp() as u64 + 3600),
-                    });
-                    // Skip to project selection
-                    self.state = WizardState::SelectProject;
-                }
-            }
-        }
+    /// Load OAuth from config if exists (deprecated - now uses platform selection UI)
+    pub fn load_oauth_from_config(&mut self, _config: &AppConfig) {
+        // No-op: Platform selection is now handled in the ConnectAccount UI step
     }
 
     /// Save OAuth to config
@@ -330,117 +315,80 @@ impl GcpWizard {
     }
 
     fn render_connect_account(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Connect to Google Cloud");
+        ui.heading("Select Google Cloud Account");
         ui.add_space(8.0);
 
-        // Check if already connected (OAuth result exists)
-        if self.oauth_result.is_some() {
+        // Load available platforms on first render
+        if self.available_platforms.is_empty() {
+            self.load_available_platforms();
+        }
+
+        // Check if any platforms are available
+        if self.available_platforms.is_empty() {
             ui.colored_label(
-                egui::Color32::from_rgb(72, 187, 120),
-                "✓ Already connected to Google Cloud",
+                egui::Color32::from_rgb(255, 152, 0),
+                "⚠ No connected Google Cloud platforms found",
             );
             ui.add_space(8.0);
 
-            ui.label("You can continue to project configuration or disconnect and reconnect.");
+            ui.label("You need to add a GCP platform first before creating VMs.");
+            ui.add_space(4.0);
+            ui.label("Steps:");
+            ui.label("  1. Go to the Platform tab");
+            ui.label("  2. Click 'Add Platform'");
+            ui.label("  3. Select 'GCP' and connect your Google account");
+            ui.label("  4. Return here to create a VM");
+
             ui.add_space(16.0);
 
-            ui.horizontal(|ui| {
-                if ui.add(MaterialButton::outlined("Disconnect")).clicked() {
-                    // Clear OAuth from config
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        if let Ok((mut app_config, config_path)) = self.load_config_file() {
-                            self.clear_oauth_from_config(&mut app_config);
-                            if let Err(e) = app_config.save(&config_path) {
-                                self.progress_log
-                                    .push(format!("⚠ Failed to save config: {}", e));
-                            } else {
-                                self.progress_log
-                                    .push("✓ OAuth cleared from config".to_string());
-                            }
-                        }
-                    }
-
-                    // Clear OAuth from memory
-                    self.oauth_result = None;
-                    self.progress_log
-                        .push("Disconnected from Google Cloud".to_string());
-                }
-
-                ui.add_space(8.0);
-
-                if ui.add(MaterialButton::filled("Next →")).clicked() {
-                    self.state = WizardState::SelectProject;
-                }
-            });
+            if ui.button("Cancel").clicked() {
+                self.hide();
+            }
 
             return;
         }
 
-        ui.label("Click the button below to authorize Dure to access your Google Cloud Platform account.");
-        ui.add_space(4.0);
-        ui.label("Required permissions:");
-        ui.label("  • Compute Engine (create and manage VM instances)");
-        ui.label("  • Cloud Platform (project access)");
-        ui.add_space(4.0);
-        ui.colored_label(
-            egui::Color32::GRAY,
-            "Note: Only Cloud Resource Manager API needs to be enabled in your OAuth project.",
-        );
+        ui.label("Select which Google Cloud account to use for this VM:");
+        ui.add_space(8.0);
+
+        // Platform selection combobox
+        egui::ComboBox::from_label("GCP Account")
+            .selected_text(&self.selected_platform_email)
+            .show_ui(ui, |ui| {
+                for platform in &self.available_platforms {
+                    if let Some(email) = &platform.gcp_connected_email {
+                        let selected = self.selected_platform_email == *email;
+                        if ui.selectable_label(selected, email).clicked() {
+                            self.selected_platform_email = email.clone();
+                        }
+                    }
+                }
+            });
 
         ui.add_space(16.0);
 
-        // Check for OAuth promise result
-        if let Some(promise) = &self.oauth_promise {
-            if let Some(result) = promise.ready() {
-                match result {
-                    Ok(oauth_result) => {
-                        self.oauth_result = Some(oauth_result.clone());
-                        self.progress_log.push("✓ OAuth successful".to_string());
-
-                        // Store refresh token in keyring
-                        if let Err(e) = self.store_oauth_token(oauth_result) {
-                            self.state =
-                                WizardState::Error(format!("Failed to store token: {}", e));
-                        } else {
-                            // Save OAuth to config
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                if let Ok((mut app_config, config_path)) = self.load_config_file() {
-                                    if let Err(e) = self.save_oauth_to_config(&mut app_config) {
-                                        self.progress_log.push(format!(
-                                            "⚠ Failed to save OAuth to config: {}",
-                                            e
-                                        ));
-                                    } else if let Err(e) = app_config.save(&config_path) {
-                                        self.progress_log
-                                            .push(format!("⚠ Failed to save config: {}", e));
-                                    } else {
-                                        self.progress_log
-                                            .push("✓ OAuth saved to config".to_string());
-                                    }
-                                }
-                            }
-
-                            // Go directly to project configuration (no API calls needed)
-                            self.state = WizardState::SelectProject;
-                        }
-
-                        self.oauth_promise = None;
-                    }
-                    Err(e) => {
-                        self.state = WizardState::Error(e.clone());
-                        self.oauth_promise = None;
+        // Next button
+        ui.horizontal(|ui| {
+            if ui.add(MaterialButton::filled("Next →")).clicked() {
+                // Load OAuth from selected platform
+                if let Some(platform) = self.available_platforms.iter().find(|p| {
+                    p.gcp_connected_email.as_ref() == Some(&self.selected_platform_email)
+                }) {
+                    if let (Some(access_token), Some(refresh_token)) = (
+                        &platform.gcp_oauth_access_token,
+                        &platform.gcp_oauth_refresh_token,
+                    ) {
+                        self.oauth_result = Some(OAuthResult {
+                            access_token: access_token.clone(),
+                            refresh_token: refresh_token.clone(),
+                            expires_at: platform
+                                .gcp_oauth_token_expiry
+                                .map(|exp| exp as u64)
+                                .unwrap_or(chrono::Utc::now().timestamp() as u64 + 3600),
+                        });
+                        self.state = WizardState::SelectProject;
                     }
                 }
-            } else {
-                ui.spinner();
-                ui.label("Waiting for authorization...");
-                ui.label("Please complete the OAuth flow in your browser.");
-            }
-        } else {
-            if ui.add(MaterialButton::filled("Connect Account")).clicked() {
-                self.start_oauth();
             }
 
             ui.add_space(8.0);
@@ -448,7 +396,7 @@ impl GcpWizard {
             if ui.button("Cancel").clicked() {
                 self.hide();
             }
-        }
+        });
     }
 
     fn render_select_project(&mut self, ui: &mut egui::Ui) {
@@ -763,14 +711,22 @@ impl GcpWizard {
         // Region selection
         ui.horizontal(|ui| {
             ui.label("Region:");
+            // Find current region to show friendly name
+            let selected_display = self
+                .available_regions
+                .iter()
+                .find(|r| r.name == self.selected_region)
+                .map(|r| format!("{} ({})", r.location, r.name))
+                .unwrap_or_else(|| self.selected_region.clone());
+
             egui::ComboBox::from_id_salt("region_combo")
-                .selected_text(&self.selected_region)
+                .selected_text(&selected_display)
                 .show_ui(ui, |ui| {
                     for region in &self.available_regions {
                         ui.selectable_value(
                             &mut self.selected_region,
                             region.name.clone(),
-                            format!("{} ({})", region.name, region.location),
+                            format!("{} ({})", region.location, region.name),
                         );
                     }
                 });
@@ -935,7 +891,7 @@ impl GcpWizard {
 
                     // SSH command hint
                     ui.add_space(4.0);
-                    ui.label(format!("💻 SSH: ssh user@{}", ip));
+                    ui.label(format!("💻 SSH: ssh root@{}", ip));
                 } else {
                     ui.label("🌐 External IP: (assigning...)");
                 }
@@ -945,13 +901,16 @@ impl GcpWizard {
                 }
             });
 
+            // Save VM to config (do this once when state transitions to Complete)
+            self.save_vm_to_config();
+
             ui.add_space(12.0);
 
             ui.label("📋 Next steps:");
             if !is_running {
                 ui.label("  1. ⏳ Wait for instance to reach RUNNING status");
             }
-            ui.label("  2. 🔑 Configure SSH access (add your public key)");
+            ui.label("  2. 🔑 SSH key already configured for root access");
             ui.label("  3. 🔐 Set up firewall rules if needed");
             ui.label("  4. 📦 Install your application");
 
@@ -976,6 +935,125 @@ impl GcpWizard {
 
         if ui.add(MaterialButton::filled("Close")).clicked() {
             self.hide();
+        }
+    }
+
+    /// Save VM instance to config
+    fn save_vm_to_config(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(instance) = &self.created_instance {
+                if let Ok((mut app_config, config_path)) = self.load_config_file() {
+                    // Find the platform
+                    if let Some(platform) = app_config
+                        .platforms
+                        .iter_mut()
+                        .find(|p| p.name == self.platform_name)
+                    {
+                        // Check if VM already exists
+                        if platform.vms.iter().any(|vm| vm.instance_id == instance.id) {
+                            return; // Already saved
+                        }
+
+                        // Extract region from zone (e.g., "us-central1-a" -> "us-central1")
+                        let region = self.selected_zone
+                            .rsplitn(2, '-')
+                            .nth(1)
+                            .unwrap_or(&self.selected_zone)
+                            .to_string();
+
+                        // Fetch billing account name
+                        let billing_account_name = if let Some(oauth) = &self.oauth_result {
+                            use crate::calc::gcp_rest::GcpRestClient;
+                            let client = GcpRestClient::new(oauth.access_token.clone());
+
+                            match client.list_billing_accounts() {
+                                Ok(list) => {
+                                    if let Some(ba) = list.billing_accounts.first() {
+                                        // Extract billing account ID from name (e.g., "billingAccounts/012345-ABCDEF-678901" -> "012345-ABCDEF-678901")
+                                        let account_id = ba.name
+                                            .strip_prefix("billingAccounts/")
+                                            .unwrap_or(&ba.name)
+                                            .to_string();
+
+                                        self.progress_log.push(format!(
+                                            "✓ Found billing account: {} ({})",
+                                            ba.display_name,
+                                            account_id
+                                        ));
+                                        Some(account_id)
+                                    } else {
+                                        self.progress_log.push("⚠ No billing accounts found".to_string());
+                                        None
+                                    }
+                                }
+                                Err(e) => {
+                                    self.progress_log.push(format!(
+                                        "⚠ Failed to fetch billing account: {}",
+                                        e
+                                    ));
+                                    None
+                                }
+                            }
+                        } else {
+                            self.progress_log.push("⚠ No OAuth token available for billing account fetch".to_string());
+                            None
+                        };
+
+                        // Create VM instance entry
+                        let ssh_key_name = format!("gcp.{}.{}", self.platform_name, instance.name);
+                        let vm = crate::config::VmInstance {
+                            name: instance.name.clone(),
+                            instance_id: instance.id.clone(),
+                            zone: self.selected_zone.clone(),
+                            gcp_region: region,
+                            machine_type: self.selected_machine_type.clone(),
+                            status: instance.status.clone(),
+                            external_ip: instance.external_ip.clone(),
+                            internal_ip: instance.internal_ip.clone(),
+                            gcp_project_id: self.selected_project_id.clone(),
+                            gcp_billing_account: billing_account_name,
+                            created_at: chrono::Utc::now().timestamp(),
+                            ssh_key_name: Some(ssh_key_name.clone()),
+                        };
+
+                        // Add VM to platform
+                        platform.vms.push(vm);
+
+                        // Add SSH host entry if external IP is available
+                        if let Some(external_ip) = &instance.external_ip {
+                            let ssh_host = crate::config::SshHostConfig {
+                                host: format!("root@{}", external_ip),
+                                password: None,
+                                private_key_path: None,
+                                keyring_domain: Some(ssh_key_name.clone()),
+                                port: 22,
+                                initialized: true,
+                                last_status: None,
+                            };
+
+                            // Check if SSH host already exists
+                            if !app_config.ssh_hosts.iter().any(|h| h.host == ssh_host.host) {
+                                app_config.ssh_hosts.push(ssh_host);
+                                self.progress_log
+                                    .push(format!("✓ SSH host added: root@{}", external_ip));
+                            }
+                        } else {
+                            self.progress_log
+                                .push("⚠ No external IP, SSH host not added".to_string());
+                        }
+
+                        // Save config
+                        if let Err(e) = app_config.save(&config_path) {
+                            self.progress_log
+                                .push(format!("⚠ Failed to save VM to config: {}", e));
+                        } else {
+                            self.progress_log
+                                .push("✓ VM saved to config".to_string());
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1082,83 +1160,14 @@ impl GcpWizard {
     fn start_oauth(&mut self) {
         self.progress_log.push("Starting OAuth flow...".to_string());
 
-        // Load OAuth credentials from config
-        let (client_id, client_secret) = match self.load_oauth_credentials() {
-            Ok((id, secret)) => (id, secret),
-            Err(e) => {
-                self.state = WizardState::Error(format!(
-                    "Failed to load OAuth credentials: {}\n\n\
-                     Please configure gcp_oauth_client_id and gcp_oauth_client_secret \
-                     in ~/.config/dure/config.yml or set GCP_CLIENT_ID and GCP_CLIENT_SECRET \
-                     environment variables.",
-                    e
-                ));
-                return;
-            }
-        };
-
-        // Validate credentials
-        if client_id.is_empty() || client_secret.is_empty() {
-            self.state = WizardState::Error(
-                "OAuth credentials not configured.\n\n\
-                 Please add to ~/.config/dure/config.yml:\n\
-                 platforms:\n\
-                   - name: \"your-platform\"\n\
-                     platform_type: \"gcp\"\n\
-                     gcp_oauth_client_id: \"your-client-id.apps.googleusercontent.com\"\n\
-                     gcp_oauth_client_secret: \"GOCSPX-your-secret\""
-                    .to_string(),
-            );
-            return;
-        }
-
-        let handler = OAuthHandler::new(client_id, client_secret);
+        // Use embedded OAuth credentials (compiled into binary)
+        let handler = OAuthHandler::default();
 
         self.oauth_promise = Some(Promise::spawn_thread("gcp_oauth", move || {
             handler.run_oauth_flow().map_err(|e| e.to_string())
         }));
     }
 
-    /// Load OAuth credentials from config file or environment variables
-    fn load_oauth_credentials(&self) -> Result<(String, String), String> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Try to load from config file
-            if let Ok(config_path) = self.get_config_path() {
-                let app_config = AppConfig::load_or_default(&config_path);
-
-                // Find the platform by name
-                if let Some(platform) = app_config
-                    .platforms
-                    .iter()
-                    .find(|p| p.name == self.platform_name)
-                {
-                    // Use config values if available
-                    if let (Some(id), Some(secret)) = (
-                        &platform.gcp_oauth_client_id,
-                        &platform.gcp_oauth_client_secret,
-                    ) {
-                        return Ok((id.clone(), secret.clone()));
-                    }
-                }
-            }
-
-            // Fallback to environment variables
-            let client_id = std::env::var("GCP_CLIENT_ID").unwrap_or_default();
-            let client_secret = std::env::var("GCP_CLIENT_SECRET").unwrap_or_default();
-
-            if !client_id.is_empty() && !client_secret.is_empty() {
-                return Ok((client_id, client_secret));
-            }
-
-            Err("OAuth credentials not found in config or environment".to_string())
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            Err("OAuth not supported on WASM".to_string())
-        }
-    }
 
     /// Get config file path
     #[cfg(not(target_arch = "wasm32"))]
@@ -1176,6 +1185,28 @@ impl GcpWizard {
         Ok((app_config, config_path))
     }
 
+    fn load_available_platforms(&mut self) {
+        if let Ok((app_config, _)) = self.load_config_file() {
+            // Filter platforms with GCP connection (has gcp_connected_email)
+            self.available_platforms = app_config
+                .platforms
+                .into_iter()
+                .filter(|p| {
+                    p.platform_type == "gcp"
+                    && p.gcp_connected_email.is_some()
+                    && p.gcp_oauth_access_token.is_some()
+                })
+                .collect();
+
+            // Auto-select first platform if available
+            if !self.available_platforms.is_empty() && self.selected_platform_email.is_empty() {
+                if let Some(email) = &self.available_platforms[0].gcp_connected_email {
+                    self.selected_platform_email = email.clone();
+                }
+            }
+        }
+    }
+
     fn store_oauth_token(&self, oauth_result: &OAuthResult) -> Result<(), String> {
         // Store refresh token in keyring (overwrites existing if present)
         let domain = format!("gcp.{}", self.platform_name);
@@ -1185,10 +1216,10 @@ impl GcpWizard {
         // Get keyring paths
         let kdbx_path = keyring::get_default_kdbx_path()
             .map_err(|e| format!("Failed to get kdbx path: {}", e))?;
-        let keyfile_path = keyring::get_default_keyfile_path()
-            .map_err(|e| format!("Failed to get keyfile path: {}", e))?;
+        let kpkey_path = keyring::get_default_kpkey_path()
+            .map_err(|e| format!("Failed to get KPKey path: {}", e))?;
 
-        keyring::update_key(&kdbx_path, Some(&keyfile_path), &domain, username, password)
+        keyring::update_key(&kdbx_path, Some(&kpkey_path), &domain, username, password)
             .map_err(|e| format!("Failed to store OAuth token: {}", e))?;
 
         Ok(())
@@ -1361,6 +1392,7 @@ impl GcpWizard {
         let zone = self.selected_zone.clone();
         let instance_name = self.instance_name.clone();
         let machine_type = self.selected_machine_type.clone();
+        let platform_name = self.platform_name.clone();
 
         let access_token = self
             .oauth_result
@@ -1371,15 +1403,34 @@ impl GcpWizard {
         self.create_promise = Some(Promise::spawn_thread("gcp_create_vm", move || {
             let client = GcpRestClient::new(access_token);
 
-            // Create instance request (skip project existence check - assumes project exists)
-            // If project doesn't exist, VM creation will fail with clear error
-            let instance_req = InstanceRequest::debian_micro(instance_name.clone(), zone.clone());
+            // Create firewall rule if it doesn't exist
+            Self::ensure_firewall_exists(&client, &project_id)
+                .map_err(|e| format!("Failed to ensure firewall: {}", e))?;
+
+            // Generate SSH key pair for this instance
+            let (ssh_private_key, ssh_public_key, _raw_private, _raw_public) = Self::generate_ssh_key_pair()
+                .map_err(|e| format!("Failed to generate SSH key: {}", e))?;
+
+            // Store private key in keyring
+            Self::store_ssh_key_in_keyring(&instance_name, &platform_name, &ssh_private_key)
+                .map_err(|e| format!("Failed to store SSH key: {}", e))?;
+
+            // Create instance request with startup script
+            let mut instance_req = InstanceRequest::debian_micro(instance_name.clone(), zone.clone());
 
             // Customize machine type if not default
-            let mut instance_req = instance_req;
             if machine_type != "e2-micro" {
                 instance_req.machine_type = format!("zones/{}/machineTypes/{}", zone, machine_type);
             }
+
+            // Generate and add startup script metadata
+            let startup_script = Self::generate_startup_script(&ssh_public_key);
+            instance_req.metadata = Some(Metadata {
+                items: vec![MetadataItem {
+                    key: "startup-script".to_string(),
+                    value: startup_script,
+                }],
+            });
 
             // Create the instance
             let operation = client
@@ -1416,6 +1467,319 @@ impl GcpWizard {
                 creation_timestamp: String::new(),
             })
         }));
+    }
+
+    /// Ensure Dure firewall rule exists
+    fn ensure_firewall_exists(client: &GcpRestClient, project_id: &str) -> Result<(), String> {
+        const FIREWALL_NAME: &str = "dure";
+        const FIREWALL_TAG: &str = "dure";
+
+        // Check if firewall already exists
+        match client.list_firewalls(project_id, Some(FIREWALL_NAME)) {
+            Ok(response) => {
+                if response.items.is_some() && !response.items.unwrap().is_empty() {
+                    // Firewall already exists
+                    return Ok(());
+                }
+            }
+            Err(_) => {
+                // Error listing, will try to create anyway
+            }
+        }
+
+        // Create firewall rule
+        use crate::calc::gcp_rest::{FirewallRequest, FirewallAllowed};
+
+        let firewall_req = FirewallRequest {
+            name: FIREWALL_NAME.to_string(),
+            description: Some("Dure VM access - allows all traffic".to_string()),
+            direction: "INGRESS".to_string(),
+            priority: 1000,
+            target_tags: vec![FIREWALL_TAG.to_string()],
+            allowed: vec![
+                FirewallAllowed {
+                    ip_protocol: "all".to_string(),
+                    ports: None,
+                },
+            ],
+            source_ranges: vec!["0.0.0.0/0".to_string()],
+        };
+
+        client.create_firewall(project_id, &firewall_req)
+            .map_err(|e| format!("Failed to create firewall: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Generate Ed25519 SSH key pair
+    /// Returns (private_key_pem, public_key_openssh, raw_private, raw_public)
+    fn generate_ssh_key_pair() -> Result<(String, String, Vec<u8>, Vec<u8>), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use go_webauthn::*;
+            use pollster::block_on;
+
+            let gen_req = Ed25519GenerateKeyRequest {};
+            let gen_resp = block_on(crypto_ed25519_generate_key(&gen_req));
+
+            if !gen_resp.success {
+                return Err(format!("Failed to generate key: {}", gen_resp.error));
+            }
+
+            // Convert to SSH format
+            let private_key = Self::ed25519_to_openssh_private(&gen_resp.private_key, &gen_resp.public_key)?;
+            let public_key = Self::ed25519_to_openssh_public(&gen_resp.public_key)?;
+
+            Ok((private_key, public_key, gen_resp.private_key, gen_resp.public_key))
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err("SSH key generation not supported on WASM".to_string())
+        }
+    }
+
+    /// Convert Ed25519 private key to OpenSSH format
+    fn ed25519_to_openssh_private(private_key: &[u8], public_key: &[u8]) -> Result<String, String> {
+        // Proper OpenSSH private key format (RFC 4253 + OpenSSH extensions)
+        // Reference: https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.key
+
+        // Ed25519 private key can be 32 bytes (seed) or 64 bytes (seed + public)
+        let private_seed = if private_key.len() == 64 {
+            // Take first 32 bytes if 64 bytes provided
+            &private_key[0..32]
+        } else if private_key.len() == 32 {
+            private_key
+        } else {
+            return Err(format!("Ed25519 private key must be 32 or 64 bytes, got {}", private_key.len()));
+        };
+
+        if public_key.len() != 32 {
+            return Err(format!("Ed25519 public key must be 32 bytes, got {}", public_key.len()));
+        }
+
+        let mut key_data = Vec::new();
+
+        // Magic bytes "openssh-key-v1\0"
+        key_data.extend_from_slice(b"openssh-key-v1\0");
+
+        // Cipher name (none = unencrypted)
+        Self::write_string(&mut key_data, b"none");
+
+        // KDF name (none)
+        Self::write_string(&mut key_data, b"none");
+
+        // KDF options (empty string)
+        Self::write_string(&mut key_data, b"");
+
+        // Number of keys (1)
+        key_data.extend_from_slice(&1u32.to_be_bytes());
+
+        // Public key blob
+        let mut public_blob = Vec::new();
+        Self::write_string(&mut public_blob, b"ssh-ed25519");
+        Self::write_string(&mut public_blob, public_key);
+        Self::write_string(&mut key_data, &public_blob);
+
+        // Private key section
+        let mut private_section = Vec::new();
+
+        // Check bytes (random, repeated)
+        let check = 0x12345678u32;
+        private_section.extend_from_slice(&check.to_be_bytes());
+        private_section.extend_from_slice(&check.to_be_bytes());
+
+        // Key type
+        Self::write_string(&mut private_section, b"ssh-ed25519");
+
+        // Public key
+        Self::write_string(&mut private_section, public_key);
+
+        // Private key (64 bytes: 32 private seed + 32 public for Ed25519)
+        let mut full_private = Vec::new();
+        full_private.extend_from_slice(private_seed);
+        full_private.extend_from_slice(public_key);
+        Self::write_string(&mut private_section, &full_private);
+
+        // Comment
+        Self::write_string(&mut private_section, b"dure-vm-key");
+
+        // Padding to block size (8 bytes for unencrypted)
+        let padding_len = 8 - (private_section.len() % 8);
+        for i in 1..=padding_len {
+            private_section.push(i as u8);
+        }
+
+        // Write private section length and data
+        Self::write_string(&mut key_data, &private_section);
+
+        // Base64 encode and wrap in PEM format
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&key_data);
+
+        // Split into 70-character lines
+        let mut pem = String::from("-----BEGIN OPENSSH PRIVATE KEY-----\n");
+        for chunk in encoded.as_bytes().chunks(70) {
+            pem.push_str(std::str::from_utf8(chunk).unwrap());
+            pem.push('\n');
+        }
+        pem.push_str("-----END OPENSSH PRIVATE KEY-----\n");
+
+        Ok(pem)
+    }
+
+    /// Helper to write a string with length prefix (SSH string format)
+    fn write_string(buf: &mut Vec<u8>, data: &[u8]) {
+        buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        buf.extend_from_slice(data);
+    }
+
+    /// Convert Ed25519 public key to OpenSSH format
+    fn ed25519_to_openssh_public(public_key: &[u8]) -> Result<String, String> {
+        if public_key.len() != 32 {
+            return Err(format!("Ed25519 public key must be 32 bytes, got {}", public_key.len()));
+        }
+
+        // OpenSSH public key format: ssh-ed25519 <base64-encoded-blob> comment
+        // The blob contains: algorithm-name-length | algorithm-name | key-length | key-bytes
+        let mut blob = Vec::new();
+
+        // Write algorithm name with length prefix
+        Self::write_string(&mut blob, b"ssh-ed25519");
+
+        // Write public key with length prefix
+        Self::write_string(&mut blob, public_key);
+
+        // Base64 encode the blob
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&blob);
+
+        Ok(format!("ssh-ed25519 {} dure-vm-key", encoded))
+    }
+
+    /// Store SSH private key in keyring
+    fn store_ssh_key_in_keyring(
+        instance_name: &str,
+        platform_name: &str,
+        private_key: &str,
+    ) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let domain = format!("gcp.{}.{}", platform_name, instance_name);
+            let username = "root";
+
+            let kdbx_path = keyring::get_default_kdbx_path()
+                .map_err(|e| format!("Failed to get kdbx path: {}", e))?;
+            let kpkey_path = keyring::get_default_kpkey_path()
+                .map_err(|e| format!("Failed to get KPKey path: {}", e))?;
+
+            // Store SSH key as binary attachment, not in password field
+            keyring::update_key_with_ssh(
+                &kdbx_path,
+                Some(&kpkey_path),
+                &domain,
+                username,
+                "", // Empty password field
+                Some(private_key.as_bytes()), // SSH key as binary attachment
+                Some("GCP VM SSH private key"), // Notes
+            )
+            .map_err(|e| format!("Failed to store SSH key: {}", e))?;
+
+            Ok(())
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err("Keyring not supported on WASM".to_string())
+        }
+    }
+
+    /// Generate startup script for VM initialization
+    fn generate_startup_script(ssh_public_key: &str) -> String {
+        format!(
+            r#"#!/bin/bash
+# Don't exit on errors - we want SSH config to run even if swap fails
+set -uo pipefail
+
+# Log output
+exec &> /var/log/dure-startup.log
+echo "Starting Dure VM initialization at $(date)"
+
+# Enable BBR congestion control
+echo "Enabling BBR..."
+cat >> /etc/sysctl.conf << 'EOF'
+
+# Added by Dure
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+sysctl -p
+
+# Add swap if memory is less than 8GB
+TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{{print $2}}')
+TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
+DISK_AVAIL_GB=$(df -BG / | awk 'NR==2 {{print $4}}' | sed 's/G//')
+
+if [ $TOTAL_MEM_GB -lt 8 ]; then
+    # Determine swap size based on available disk space
+    # Reserve 2GB for system, use the rest for swap (up to 8GB max)
+    if [ $DISK_AVAIL_GB -gt 10 ]; then
+        SWAP_SIZE_GB=8
+    elif [ $DISK_AVAIL_GB -gt 2 ]; then
+        SWAP_SIZE_GB=$((DISK_AVAIL_GB - 2))
+    else
+        echo "Insufficient disk space (${{DISK_AVAIL_GB}}GB available), skipping swap"
+        SWAP_SIZE_GB=0
+    fi
+
+    if [ $SWAP_SIZE_GB -gt 0 ]; then
+        echo "Total memory is ${{TOTAL_MEM_GB}}GB, disk available ${{DISK_AVAIL_GB}}GB"
+        echo "Creating ${{SWAP_SIZE_GB}}GB swap..."
+
+        # Try fallocate first, fall back to dd
+        if fallocate -l "${{SWAP_SIZE_GB}}G" /swapfile 2>/dev/null; then
+            echo "Created ${{SWAP_SIZE_GB}}GB swap with fallocate"
+        elif dd if=/dev/zero of=/swapfile bs=1G count=$SWAP_SIZE_GB 2>/dev/null; then
+            echo "Created ${{SWAP_SIZE_GB}}GB swap with dd"
+        else
+            echo "WARNING: Failed to create swap file, continuing without swap..."
+        fi
+
+        # Only configure swap if file was created successfully
+        if [ -f /swapfile ] && [ -s /swapfile ]; then
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            echo "Swap added successfully: ${{SWAP_SIZE_GB}}GB"
+        fi
+    fi
+else
+    echo "Memory is ${{TOTAL_MEM_GB}}GB, no swap needed"
+fi
+
+# Configure SSH for root access with key authentication
+echo "Configuring SSH..."
+
+# Create .ssh directory for root
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+
+# Add SSH public key to authorized_keys (append to preserve GCP Console SSH access)
+touch /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+echo "{}" >> /root/.ssh/authorized_keys
+
+# Configure sshd
+sed -i 's/#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+# Restart sshd
+systemctl restart sshd || systemctl restart ssh
+
+echo "Dure VM initialization completed at $(date)"
+"#,
+            ssh_public_key
+        )
     }
 
     /// Validate GCP project ID
