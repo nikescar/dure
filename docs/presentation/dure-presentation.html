@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dure - Distributed E-commerce Platform</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.6.0/dist/reset.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.6.0/dist/reveal.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.6.0/dist/theme/white.css">
+    <style>
+        .reveal h1, .reveal h2, .reveal h3 { text-transform: none; }
+        .reveal h1 { font-size: 2.5em; color: #2c3e50; }
+        .reveal h2 { font-size: 1.8em; color: #34495e; margin-bottom: 30px; }
+        .reveal h3 { font-size: 1.4em; color: #7f8c8d; }
+        .reveal strong { color: #e74c3c; }
+        .reveal ul { text-align: left; }
+        .reveal li { margin: 15px 0; }
+        .reveal table { font-size: 0.8em; }
+        .reveal th { background-color: #3498db; color: white; }
+        .reveal td { border-bottom: 1px solid #ddd; }
+        .highlight { background-color: #ffffcc; padding: 10px; border-radius: 5px; }
+        .two-column { display: flex; justify-content: space-between; }
+        .column { flex: 1; padding: 0 20px; }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+
+            <!-- Title Slide -->
+            <section data-background-gradient="linear-gradient(to bottom, #3498db, #2c3e50)">
+                <h1 style="color: white;">Dure</h1>
+                <h3 style="color: #ecf0f1;">Distributed E-commerce Platform</h3>
+                <p style="color: #bdc3c7; margin-top: 50px;">Empowering small shop owners with complete control</p>
+            </section>
+
+            <!-- Introduction -->
+            <section>
+                <h2>What is Dure?</h2>
+                <p>A distributed e-commerce platform that empowers small shop owners with complete control over their online stores.</p>
+                <p>Built with <strong>Rust</strong> and <strong>egui</strong>, it provides a modern solution for running e-commerce operations <em>without relying on traditional centralized server infrastructure</em>.</p>
+            </section>
+
+            <!-- Inspiration -->
+            <section>
+                <h2>The Name: "Dure" (두레)</h2>
+                <div class="highlight">
+                    <p style="font-size: 1.2em;">Derived from the Korean word <strong>"doorae"</strong><br>meaning <em>"a community helping each other"</em></p>
+                </div>
+                <p style="margin-top: 40px;">This reflects our core philosophy:</p>
+                <p><strong>Enabling shop owners to build sustainable businesses through distributed technology and community cooperation</strong></p>
+            </section>
+
+            <!-- Core Features - Overview -->
+            <section>
+                <h2>Five Key Components</h2>
+                <ul>
+                    <li><strong>Identity Management</strong> - Secure authentication</li>
+                    <li><strong>Guest Front (WASM)</strong> - Customer experience</li>
+                    <li><strong>Store Front (WASM)</strong> - Shop display</li>
+                    <li><strong>Hosting Management (EGUI)</strong> - Infrastructure control</li>
+                    <li><strong>Store Management (EGUI)</strong> - Business operations</li>
+                </ul>
+            </section>
+
+            <!-- Core Features - Identity Management -->
+            <section>
+                <h2>Identity Management</h2>
+                <ul>
+                    <li>Secure authentication using <strong>private/public key pairs</strong></li>
+                    <li>Firebase/Supabase integration</li>
+                    <li>Attestation for WASM/EGUI apps with GitHub Sigstore</li>
+                </ul>
+            </section>
+
+            <!-- Core Features - Guest & Store Front -->
+            <section>
+                <h2>Guest & Store Front</h2>
+                <div class="two-column">
+                    <div class="column">
+                        <h3>Guest Front (WASM)</h3>
+                        <ul>
+                            <li>Browse products</li>
+                            <li>Manage carts</li>
+                            <li>Complete purchases</li>
+                            <li>Minimal identity requirements</li>
+                        </ul>
+                    </div>
+                    <div class="column">
+                        <h3>Store Front (WASM)</h3>
+                        <ul>
+                            <li>Display products</li>
+                            <li>Manage listings</li>
+                            <li>Portone integration</li>
+                            <li>KakaoPay integration</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Core Features - Hosting & Store Management -->
+            <section>
+                <h2>Hosting & Store Management</h2>
+                <div class="two-column">
+                    <div class="column">
+                        <h3>Hosting Management</h3>
+                        <ul>
+                            <li>DNS management (octodns)</li>
+                            <li>Database setup</li>
+                            <li>Site deployment</li>
+                        </ul>
+                    </div>
+                    <div class="column">
+                        <h3>Store Management</h3>
+                        <ul>
+                            <li>Promotions</li>
+                            <li>Products & Orders</li>
+                            <li>Shipments</li>
+                            <li>Accounts</li>
+                            <li>Shared listings</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Technical Architecture -->
+            <section>
+                <h2>Technical Architecture</h2>
+                <ul>
+                    <li><strong>Language:</strong> Rust (2021 edition) for performance and reliability</li>
+                    <li><strong>UI Framework:</strong> egui + eframe with Material3 design</li>
+                    <li><strong>Platform Support:</strong> Desktop (Linux, Windows, macOS), Android, WASM</li>
+                    <li><strong>Database:</strong> Diesel ORM with SQLite, optional PostgreSQL</li>
+                    <li><strong>Async Runtime:</strong> asupersync for efficient I/O operations</li>
+                </ul>
+            </section>
+
+            <!-- Deployment Models -->
+            <section>
+                <h2>Three Deployment Models</h2>
+                <div style="display: flex; justify-content: space-around; margin-top: 50px;">
+                    <div style="text-align: center;">
+                        <h3>🖥️ Desktop</h3>
+                        <p>EGUI with system tray</p>
+                    </div>
+                    <div style="text-align: center;">
+                        <h3>📱 Mobile</h3>
+                        <p>Android native-activity</p>
+                    </div>
+                    <div style="text-align: center;">
+                        <h3>🌐 Web</h3>
+                        <p>WASM for guests & stores</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Hosting Flexibility -->
+            <section>
+                <h2>Hosting Flexibility</h2>
+                <p>Shop owners can choose their preferred infrastructure:</p>
+                <ul>
+                    <li><strong>Cloud Platforms:</strong> GCP, Firebase, or Supabase</li>
+                    <li><strong>DNS Providers:</strong> Cloudflare, Porkbun, DuckDNS, Google Cloud DNS</li>
+                    <li><strong>Payment Gateways:</strong> Portone and KakaoPay integration</li>
+                    <li><strong>Self-Hosting:</strong> Deploy on cafe24 or custom VPS</li>
+                </ul>
+                <p style="margin-top: 40px;"><em>Shop owners maintain complete control over their data and infrastructure choices</em></p>
+            </section>
+
+            <!-- Key Advantages -->
+            <section>
+                <h2>Key Advantages</h2>
+                <div style="text-align: left; margin: 30px auto; max-width: 900px;">
+                    <div class="highlight" style="margin-bottom: 20px;">
+                        <h3>💰 Zero Transaction Fees</h3>
+                        <p>Unlike traditional platforms that charge 2% or more per transaction, Dure does not charge transaction fees. Shop owners keep their full revenue.</p>
+                    </div>
+                    <div class="highlight" style="margin-bottom: 20px;">
+                        <h3>🌐 Distributed Architecture</h3>
+                        <p>Each shop owner maintains their own database with content distributed via CDN. Better scalability and reduced infrastructure costs.</p>
+                    </div>
+                    <div class="highlight">
+                        <h3>🔒 Data Ownership</h3>
+                        <p>Complete control over customer data, product information, and business analytics.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Content Delivery -->
+            <section>
+                <h2>Content Delivery</h2>
+                <p>Efficient content delivery through distributed infrastructure</p>
+                <ul style="margin-top: 40px;">
+                    <li>Shop owners store content on their own CDN</li>
+                    <li>Fast access for customers worldwide</li>
+                    <li>Real-time synchronization via websocket connections</li>
+                    <li>Instant communication between stores and customers</li>
+                </ul>
+            </section>
+
+            <!-- Security -->
+            <section>
+                <h2>Security</h2>
+                <ul>
+                    <li><strong>Authentication:</strong> Passkey and FIDO2 with ES256 encryption</li>
+                    <li><strong>Site-to-Site Communication:</strong> ChaCha20-Poly1305 encryption</li>
+                    <li><strong>DDoS Protection:</strong> fail2ban integration</li>
+                    <li><strong>Access Control:</strong> Whitelisted host connections</li>
+                    <li><strong>Attestation:</strong> GitHub Sigstore verification</li>
+                </ul>
+            </section>
+
+            <!-- Customer Support -->
+            <section>
+                <h2>Customer Support</h2>
+                <p style="font-size: 1.2em;">Leverages modern <strong>AI services</strong> for efficient customer support</p>
+                <ul style="margin-top: 40px;">
+                    <li>Integrate AI assistants</li>
+                    <li>Resolve customer inquiries efficiently</li>
+                    <li>Streamline communication</li>
+                    <li>Reduce operational overhead</li>
+                    <li>Maintain quality service</li>
+                </ul>
+            </section>
+
+            <!-- Comparison Table -->
+            <section>
+                <h2>Platform Comparison</h2>
+                <table style="font-size: 0.7em;">
+                    <thead>
+                        <tr>
+                            <th>Platform</th>
+                            <th>Hosting</th>
+                            <th>Transaction Fees</th>
+                            <th>Setup Time</th>
+                            <th>Best For</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background-color: #e8f5e9;">
+                            <td><strong>Dure</strong></td>
+                            <td>Distributed (GCP/Firebase/Supabase)</td>
+                            <td><strong>0%</strong></td>
+                            <td>Hours</td>
+                            <td>Small shops, full control</td>
+                        </tr>
+                        <tr>
+                            <td>Shopify</td>
+                            <td>Fully managed</td>
+                            <td>2%</td>
+                            <td>1-2 days</td>
+                            <td>Quick launch, scalability</td>
+                        </tr>
+                        <tr>
+                            <td>Wix</td>
+                            <td>Fully managed</td>
+                            <td>0% (limited gateways)</td>
+                            <td>Hours</td>
+                            <td>Beginners, small catalogs</td>
+                        </tr>
+                        <tr>
+                            <td>Magento</td>
+                            <td>Self-hosted or Cloud</td>
+                            <td>0%</td>
+                            <td>Weeks</td>
+                            <td>Enterprise, large catalogs</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p style="margin-top: 30px; font-size: 0.9em;"><em>The autonomy of self-hosting with the convenience of modern cloud platforms</em></p>
+            </section>
+
+            <!-- Current Status -->
+            <section>
+                <h2>Current Status</h2>
+                <p>Actively under development with multiple components in testing phase</p>
+                <ul style="margin-top: 30px;">
+                    <li>✅ Desktop clients for Linux, Windows, and macOS</li>
+                    <li>✅ Android mobile application</li>
+                    <li>✅ WASM-based web frontends</li>
+                    <li>✅ Comprehensive CLI and GUI interfaces</li>
+                    <li>✅ Integration with major cloud platforms and payment gateways</li>
+                </ul>
+            </section>
+
+            <!-- Get Started -->
+            <section>
+                <h2>Get Started</h2>
+                <p>Join our community and explore Dure:</p>
+                <ul style="margin-top: 40px; font-size: 1.1em;">
+                    <li>📚 Visit the <strong>GitHub repository</strong> for documentation</li>
+                    <li>🌐 Explore the demo at <strong>dure.app</strong></li>
+                    <li>⚙️ Check <strong>GitHub Actions</strong> for runnable binaries</li>
+                    <li>🤝 Join the community to contribute and provide feedback</li>
+                </ul>
+            </section>
+
+            <!-- Thank You -->
+            <section data-background-gradient="linear-gradient(to bottom, #2c3e50, #3498db)">
+                <h1 style="color: white;">Thank You</h1>
+                <p style="color: #ecf0f1; font-size: 1.3em; margin-top: 50px;">Together, we can empower small shop owners with distributed e-commerce technology</p>
+                <p style="color: #bdc3c7; margin-top: 80px;">Questions?</p>
+            </section>
+
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.6.0/dist/reveal.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            transition: 'slide',
+            transitionSpeed: 'default',
+            backgroundTransition: 'fade',
+            controls: true,
+            progress: true,
+            center: true,
+            slideNumber: 'c/t',
+            width: 1280,
+            height: 720,
+            margin: 0.1
+        });
+    </script>
+</body>
+</html>
