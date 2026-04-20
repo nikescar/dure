@@ -240,6 +240,29 @@ fn parse_porkbun_credentials(token: &str) -> Option<(String, String)> {
     }
 }
 
+/// Normalize a nameserver for comparison
+/// - Removes trailing dot (FQDN format)
+/// - Removes .ns. subdomain (e.g., curitiba.ns.porkbun.com → curitiba.porkbun.com)
+/// - Converts to lowercase
+fn normalize_nameserver(ns: &str) -> String {
+    let mut normalized = ns.trim().to_lowercase();
+
+    // Remove trailing dot (FQDN format)
+    if normalized.ends_with('.') {
+        normalized.pop();
+    }
+
+    // Remove .ns. subdomain if present
+    // Example: curitiba.ns.porkbun.com → curitiba.porkbun.com
+    if let Some(pos) = normalized.find(".ns.") {
+        let prefix = &normalized[..pos];
+        let suffix = &normalized[pos + 4..]; // Skip ".ns."
+        normalized = format!("{}.{}", prefix, suffix);
+    }
+
+    normalized
+}
+
 /// Load NS config from YAML
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 fn load_ns_config() -> Result<NsConfig, String> {
@@ -2994,7 +3017,10 @@ impl NsTab {
                         if self.ns_dialog_provider_ns.is_empty() {
                             ui.label("(No nameservers found)");
                         } else {
-                            for ns in &self.ns_dialog_provider_ns {
+                            // Sort alphabetically for display
+                            let mut sorted_provider = self.ns_dialog_provider_ns.clone();
+                            sorted_provider.sort();
+                            for ns in &sorted_provider {
                                 ui.label(format!("• {}", ns));
                             }
                         }
@@ -3010,9 +3036,20 @@ impl NsTab {
                         if self.ns_dialog_actual_ns.is_empty() {
                             ui.label("(No NS records resolved)");
                         } else {
+                            // Sort alphabetically for display
+                            let mut sorted_actual = self.ns_dialog_actual_ns.clone();
+                            sorted_actual.sort();
+
+                            // Normalize provider nameservers for comparison
+                            let normalized_provider: Vec<String> = self.ns_dialog_provider_ns
+                                .iter()
+                                .map(|ns| normalize_nameserver(ns))
+                                .collect();
+
                             // Compare and highlight matches
-                            for ns in &self.ns_dialog_actual_ns {
-                                let matches = self.ns_dialog_provider_ns.contains(ns);
+                            for ns in &sorted_actual {
+                                let normalized_ns = normalize_nameserver(ns);
+                                let matches = normalized_provider.contains(&normalized_ns);
                                 let color = if matches {
                                     egui::Color32::from_rgb(76, 175, 80)  // Green if matches
                                 } else {
@@ -3028,9 +3065,21 @@ impl NsTab {
 
                 // Status summary
                 if !self.ns_dialog_provider_ns.is_empty() && !self.ns_dialog_actual_ns.is_empty() {
-                    let all_match = self.ns_dialog_actual_ns
+                    // Normalize both lists for comparison
+                    let normalized_provider: Vec<String> = self.ns_dialog_provider_ns
                         .iter()
-                        .all(|ns| self.ns_dialog_provider_ns.contains(ns));
+                        .map(|ns| normalize_nameserver(ns))
+                        .collect();
+
+                    let normalized_actual: Vec<String> = self.ns_dialog_actual_ns
+                        .iter()
+                        .map(|ns| normalize_nameserver(ns))
+                        .collect();
+
+                    // Check if all actual nameservers match provider nameservers
+                    let all_match = normalized_actual
+                        .iter()
+                        .all(|ns| normalized_provider.contains(ns));
 
                     if all_match {
                         ui.colored_label(

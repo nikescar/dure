@@ -1064,7 +1064,9 @@ Dual-licensed under MIT OR Apache-2.0. See LICENSE-MIT and LICENSE-Apache-2.0.
 
 ## Todos
 
-* sqlite3 wasm supports(move libsqlite3-hotbundle src/* to sqlite3/)
+* delete domain has not implemented.
+* cli commands need to match gui commands.
+* separate wasm-ui build and wasm-bg build for workers.
 
 ---
 </details>
