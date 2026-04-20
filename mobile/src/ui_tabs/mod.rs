@@ -12,7 +12,6 @@ pub mod orders;
 pub mod platform;
 pub mod products;
 pub mod roles;
-#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod site;
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub mod ssh;
@@ -27,7 +26,6 @@ pub enum Tab {
     Ssh,
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     Ns,
-    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     Site,
     Roles,
     Members,
@@ -49,7 +47,6 @@ impl Tab {
             Tab::Ssh => "SSH",
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Ns => "Nameserver",
-            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Site => "Site",
             Tab::Roles => "Roles",
             Tab::Members => "Members",
@@ -68,10 +65,9 @@ impl Tab {
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Platform,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
-            Tab::Ssh,
-            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Ns,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+            Tab::Ssh,
             Tab::Site,
             Tab::Roles,
             Tab::Members,

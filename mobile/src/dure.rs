@@ -113,7 +113,6 @@ pub struct DureApp {
     pub tab_ssh: crate::ui_tabs::ssh::SshTab,
     #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     pub tab_ns: crate::ui_tabs::ns::NsTab,
-    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     pub tab_site: crate::ui_tabs::site::SiteTab,
     pub tab_roles: crate::ui_tabs::roles::RolesTab,
     pub tab_members: crate::ui_tabs::members::MembersTab,
@@ -234,7 +233,7 @@ impl Default for DureApp {
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             active_tab: crate::ui_tabs::Tab::Platform,
             #[cfg(any(target_os = "android", target_arch = "wasm32"))]
-            active_tab: crate::ui_tabs::Tab::Client,
+            active_tab: crate::ui_tabs::Tab::Site,
             scrolling_selected: 0,
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             tab_platform: crate::ui_tabs::platform::PlatformTab::default(),
@@ -242,7 +241,6 @@ impl Default for DureApp {
             tab_ssh: crate::ui_tabs::ssh::SshTab::default(),
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             tab_ns: crate::ui_tabs::ns::NsTab::default(),
-            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             tab_site: crate::ui_tabs::site::SiteTab::default(),
             tab_roles: crate::ui_tabs::roles::RolesTab::default(),
             tab_members: crate::ui_tabs::members::MembersTab::default(),
@@ -331,8 +329,8 @@ impl DureApp {
                 .id_salt("scrolling_primary")
                 .tab(tr!("tab-client"))
                 .tab(tr!("tab-platform"))
-                .tab(tr!("tab-ssh"))
                 .tab(tr!("tab-domains"))
+                .tab(tr!("tab-ssh"))
                 .tab(tr!("tab-site"))
                 // .tab(tr!("tab-roles"))
                 .tab(tr!("tab-members"))
@@ -346,7 +344,7 @@ impl DureApp {
         ui.add(
             tabs_primary(&mut self.scrolling_selected)
                 .id_salt("scrolling_primary")
-                .tab(tr!("tab-client"))
+                .tab(tr!("tab-site"))
                 // .tab(tr!("tab-roles"))
                 .tab(tr!("tab-members"))
                 .tab(tr!("tab-channel"))
@@ -363,8 +361,8 @@ impl DureApp {
             self.active_tab = match self.scrolling_selected {
                 0 => Tab::Client,
                 1 => Tab::Platform,
-                2 => Tab::Ssh,
-                3 => Tab::Ns,
+                2 => Tab::Ns,
+                3 => Tab::Ssh,
                 4 => Tab::Site,
                 5 => Tab::Members,
                 6 => Tab::Channel,
@@ -378,14 +376,14 @@ impl DureApp {
         #[cfg(any(target_os = "android", target_arch = "wasm32"))]
         {
             self.active_tab = match self.scrolling_selected {
-                0 => Tab::Client,
+                0 => Tab::Site,
                 1 => Tab::Members,
                 2 => Tab::Channel,
                 3 => Tab::DM,
                 4 => Tab::Products,
                 5 => Tab::Orders,
                 6 => Tab::Email,
-                _ => Tab::Client,
+                _ => Tab::Site,
             };
         }
 
@@ -400,7 +398,6 @@ impl DureApp {
             Tab::Ssh => self.tab_ssh.ui(ui),
             #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Ns => self.tab_ns.ui(ui),
-            #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
             Tab::Site => self.tab_site.ui(ui),
             Tab::Roles => self.tab_roles.ui(ui),
             Tab::Members => self.tab_members.ui(ui),
