@@ -1262,8 +1262,8 @@ impl PlatformTab {
         self.billing_error = None;
         self.billing_data = None;
 
-        // Load config to get GCP platform with OAuth
-        let (app_config, _) = match load_config() {
+        // Load config mutably to allow token refresh
+        let (mut app_config, config_path) = match load_config() {
             Ok(config) => config,
             Err(e) => {
                 self.billing_error = Some(format!("Failed to load config: {}", e));
@@ -1273,12 +1273,12 @@ impl PlatformTab {
         };
 
         // Find first GCP platform with OAuth token
-        let platform = match app_config
+        let platform_idx = match app_config
             .platforms
             .iter()
-            .find(|p| p.platform_type == "gcp" && p.gcp_oauth_access_token.is_some())
+            .position(|p| p.platform_type == "gcp" && p.gcp_oauth_access_token.is_some())
         {
-            Some(p) => p,
+            Some(idx) => idx,
             None => {
                 self.billing_error = Some(
                     "No connected GCP platform found. Please add a GCP platform first.".to_string(),
@@ -1288,25 +1288,25 @@ impl PlatformTab {
             }
         };
 
-        // Get access token
-        let access_token = match &platform.gcp_oauth_access_token {
-            Some(token) => token.clone(),
-            None => {
-                self.billing_error = Some("No OAuth token found".to_string());
-                self.billing_loading = false;
-                return;
-            }
-        };
-
-        // Get project ID from VMs
-        let project_id = if !platform.vms.is_empty() {
-            platform.vms[0].gcp_project_id.clone()
+        // Get project ID from VMs before getting token
+        let project_id = if !app_config.platforms[platform_idx].vms.is_empty() {
+            app_config.platforms[platform_idx].vms[0].gcp_project_id.clone()
         } else {
             self.billing_error = Some(
                 "No VMs found. Please create a VM to determine the project ID.".to_string(),
             );
             self.billing_loading = false;
             return;
+        };
+
+        // Get valid access token (refreshes if expired)
+        let access_token = match self.get_valid_access_token(&mut app_config, platform_idx, &config_path) {
+            Ok(token) => token,
+            Err(e) => {
+                self.billing_error = Some(format!("Failed to get access token: {}", e));
+                self.billing_loading = false;
+                return;
+            }
         };
 
         // Create API client
@@ -1321,13 +1321,46 @@ impl PlatformTab {
                     self.billing_project_id = project_id.clone();
                 }
                 Err(e) => {
+                    // Try to list available datasets to help debug
+                    let available_info = if let Ok(datasets) = client.list_bigquery_datasets(&project_id) {
+                        if datasets.is_empty() {
+                            "\n\nNo BigQuery datasets found in this project.".to_string()
+                        } else {
+                            let mut info = format!("\n\nFound {} dataset(s):", datasets.len());
+                            for ds in datasets.iter().take(5) {
+                                info.push_str(&format!("\n  • {}", ds));
+                                // Try to list tables in this dataset
+                                if let Ok(tables) = client.list_bigquery_tables(&project_id, ds) {
+                                    if !tables.is_empty() {
+                                        info.push_str(&format!(" ({} tables)", tables.len()));
+                                        if ds.contains("billing") || ds.contains("export") {
+                                            info.push_str(" ← billing-related");
+                                            for table in tables.iter().take(3) {
+                                                info.push_str(&format!("\n    - {}", table));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            info
+                        }
+                    } else {
+                        String::new()
+                    };
+
                     // Fall back to default names
                     self.billing_dataset = "billing_export".to_string();
                     self.billing_table = format!("gcp_billing_export_v1_{}", project_id.replace('-', "_"));
                     self.billing_project_id = project_id.clone();
                     self.billing_error = Some(format!(
-                        "Auto-discovery failed: {}\n\nUsing default names. Please configure below if different.",
-                        e
+                        "Auto-discovery failed: {}{}
+
+Using default names. Please verify:
+1. Billing export is enabled in GCP Console
+2. Dataset name matches (default: billing_export)
+3. Wait 1-24 hours for GCP to create the table
+4. Check if table exists at: https://console.cloud.google.com/bigquery?project={}",
+                        e, available_info, project_id
                     ));
                     self.billing_loading = false;
                     return;
@@ -1342,9 +1375,43 @@ impl PlatformTab {
                 self.billing_loading = false;
             }
             Err(e) => {
+                let error_msg = e.to_string();
+
+                // Provide helpful guidance based on error type
+                // Provide helpful guidance based on error type
+                let guidance = if error_msg.contains("was not found") {
+                    format!("\n\n💡 The table doesn't exist yet. This is normal if you just enabled billing export.
+
+What to do:
+1. Wait 1-24 hours for GCP to create the table
+2. Verify billing export is enabled at:
+   https://console.cloud.google.com/billing/export
+3. Check if table exists at:
+   https://console.cloud.google.com/bigquery?project={}
+4. If using a different dataset/table name, enter it below and refresh
+
+Note: The first export can take up to 24 hours to appear.", project_id)
+                } else if error_msg.contains("Access Denied") || error_msg.contains("permission") {
+                    "\n\n💡 Permission issue. Make sure:
+1. BigQuery API is enabled
+2. Your account has BigQuery Data Viewer role
+3. Billing export is configured for this project".to_string()
+                } else {
+                    "\n\nPlease verify the settings below.".to_string()
+                };
+
                 self.billing_error = Some(format!(
-                    "Failed to fetch billing data: {}\n\nCurrent settings:\n• Project: {}\n• Dataset: {}\n• Table: {}\n\nPlease verify these settings below.",
-                    e, project_id, self.billing_dataset, self.billing_table
+                    "Failed to fetch billing data: {}{}
+
+Current settings:
+• Project: {}
+• Dataset: {}
+• Table: {}",
+                    error_msg,
+                    guidance,
+                    project_id,
+                    self.billing_dataset,
+                    self.billing_table
                 ));
                 self.billing_loading = false;
             }
