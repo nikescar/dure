@@ -823,9 +823,9 @@ impl InstanceRequest {
                 boot: true,
                 auto_delete: true,
                 initialize_params: InitializeParams {
-                    source_image: "projects/debian-cloud/global/images/family/debian-11"
+                    source_image: "projects/debian-cloud/global/images/family/debian-13" // https://docs.cloud.google.com/compute/docs/images/os-details#general-info
                         .to_string(),
-                    disk_size_gb: "10".to_string(),
+                    disk_size_gb: "30".to_string(),
                 },
             }],
             network_interfaces: vec![NetworkInterface {

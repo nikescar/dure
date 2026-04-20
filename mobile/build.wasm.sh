@@ -101,7 +101,7 @@ if [ -d ~/work/dure-wasm ]; then
     cp -rf dist/* ~/work/dure-wasm/
     echo "Copied to ~/work/dure-wasm"
 
-    cargo build --release
+    cargo build --release --target x86_64-unknown-linux-musl
     cp ../target/release/dure-desktop ../target/release/dure
     tar -czf ../target/release/dure.tar.gz -C ../target/release dure
     cp ../target/release/dure.tar.gz ~/work/dure-wasm

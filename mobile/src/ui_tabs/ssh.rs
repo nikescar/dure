@@ -83,7 +83,9 @@ pub struct SshTab {
     #[cfg_attr(feature = "serde", serde(skip))]
     install_server_promise: Option<poll_promise::Promise<Result<Vec<String>, String>>>,
     #[cfg_attr(feature = "serde", serde(skip))]
-    install_server_result: Option<Result<Vec<String>, String>>,
+    install_server_host: Option<String>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    install_progress_log: Vec<String>,
 }
 
 impl Default for SshTab {
@@ -141,7 +143,8 @@ impl Default for SshTab {
             check_server_result: None,
             install_server_in_progress: false,
             install_server_promise: None,
-            install_server_result: None,
+            install_server_host: None,
+            install_progress_log: Vec::new(),
         }
     }
 }
@@ -302,7 +305,12 @@ impl SshTab {
 
         // SSH hosts spreadsheet - fill remaining space
         if let Some(spreadsheet) = &mut self.spreadsheet {
-            let available_height = ui.available_height();
+            let mut available_height = ui.available_height();
+
+            // Reserve space for progress displays if active
+            if self.init_in_progress {
+                available_height = available_height.min(available_height - 400.0);
+            }
 
             ui.group(|ui| {
                 // Set the group to fill available space
@@ -353,12 +361,7 @@ impl SshTab {
 
         // Install progress display
         if self.install_server_in_progress {
-            self.render_install_progress(ui);
-        }
-
-        // Show install server result
-        if let Some(result) = self.install_server_result.clone() {
-            self.render_install_server_result(ui.ctx(), &result);
+            self.render_install_progress(ui.ctx());
         }
     }
 
@@ -1123,8 +1126,12 @@ impl SshTab {
     fn execute_install_server(&mut self, host: String) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            eprintln!("🚀 Starting Dure server installation on: {}", host);
             self.install_server_in_progress = true;
-            self.install_server_result = None;
+            self.install_server_host = Some(host.clone());
+            self.install_progress_log.clear();
+            self.install_progress_log.push(format!("Installing Dure server on: {}", host));
+            self.install_progress_log.push("".to_string());
 
             // Load config and get host config
             let host_config_clone = match load_config() {
@@ -1136,14 +1143,14 @@ impl SshTab {
                         .cloned()
                 }
                 Err(e) => {
-                    self.install_server_result = Some(Err(format!("Failed to load config: {}", e)));
+                    self.install_progress_log.push(format!("✗ Failed to load config: {}", e));
                     self.install_server_in_progress = false;
                     return;
                 }
             };
 
             let Some(host_config) = host_config_clone else {
-                self.install_server_result = Some(Err(format!("SSH host '{}' not found", host)));
+                self.install_progress_log.push(format!("✗ SSH host '{}' not found", host));
                 self.install_server_in_progress = false;
                 return;
             };
@@ -1151,7 +1158,7 @@ impl SshTab {
             let domain = match &host_config.domain {
                 Some(d) => d.clone(),
                 None => {
-                    self.install_server_result = Some(Err("No domain configured for this host".to_string()));
+                    self.install_progress_log.push("✗ No domain configured for this host".to_string());
                     self.install_server_in_progress = false;
                     return;
                 }
@@ -1161,65 +1168,54 @@ impl SshTab {
             let promise = poll_promise::Promise::spawn_thread("install_server", move || {
                 let mut log = Vec::new();
 
-                // Step 1: Download GitHub zip
+                // Step 1: Download and extract GitHub tar.gz
                 log.push("1. Downloading dure-wasm from GitHub...".to_string());
-                let download_cmd = "curl -L -o /tmp/dure-wasm-main.zip https://github.com/nikescar/dure-wasm/archive/refs/heads/main.zip 2>&1";
+                let download_cmd = "curl -L https://github.com/nikescar/dure-wasm/archive/refs/heads/main.tar.gz | tar -xz -C /tmp 2>&1";
                 match ssh::execute_ssh_command(&host_config, download_cmd) {
-                    Ok(output) => log.push(format!("   ✓ Downloaded: {}", output.trim())),
+                    Ok(_) => log.push("   ✓ Downloaded and extracted".to_string()),
                     Err(e) => {
                         log.push(format!("   ✗ Download failed: {}", e));
                         return Err(format!("Download failed: {}", e));
                     }
                 }
 
-                // Step 2: Extract to /tmp/dure-master
-                log.push("2. Extracting zip to /tmp/dure-wasm-main...".to_string());
-                let extract_cmd = "cd /tmp && unzip -o dure-wasm-main.zip 2>&1";
-                match ssh::execute_ssh_command(&host_config, extract_cmd) {
-                    Ok(output) => log.push(format!("   ✓ Extracted: {}", output.lines().take(3).collect::<Vec<_>>().join(", "))),
+                // Step 2: Extract dure.tar.gz to /opt/dure
+                log.push("2. Extracting dure.tar.gz to /opt/dure...".to_string());
+                let extract_tar_cmd = "mkdir -p /opt/dure && tar -xzf /tmp/dure-wasm-main/dure.tar.gz -C /opt/dure";
+                match ssh::execute_ssh_command(&host_config, extract_tar_cmd) {
+                    Ok(_) => log.push("   ✓ Extracted dure binary".to_string()),
                     Err(e) => {
                         log.push(format!("   ✗ Extract failed: {}", e));
                         return Err(format!("Extract failed: {}", e));
                     }
                 }
 
-                // Step 3: Extract dure.tar.gz to /opt/dure
-                log.push("3. Extracting dure.tar.gz to /opt/dure...".to_string());
-                let extract_tar_cmd = "mkdir -p /opt/dure && tar -xzf /tmp/dure-wasm-main/dure.tar.gz -C /opt/dure 2>&1";
-                match ssh::execute_ssh_command(&host_config, extract_tar_cmd) {
-                    Ok(output) => log.push(format!("   ✓ Extracted tar.gz: {}", output.trim())),
-                    Err(e) => {
-                        log.push(format!("   ✗ Extract tar.gz failed: {}", e));
-                        return Err(format!("Extract tar.gz failed: {}", e));
-                    }
-                }
-
-                // Step 4: Remove tar.gz
-                log.push("4. Cleaning up tar.gz...".to_string());
-                let cleanup_tar_cmd = "rm -f /tmp/dure-wasm-main/dure.tar.gz 2>&1";
-                match ssh::execute_ssh_command(&host_config, cleanup_tar_cmd) {
-                    Ok(_) => log.push("   ✓ Removed tar.gz".to_string()),
-                    Err(e) => {
-                        log.push(format!("   ⚠ Cleanup warning: {}", e));
-                    }
-                }
-
-                // Step 5: Copy files to /opt/dure/serv
-                log.push("5. Copying files to /opt/dure/serv...".to_string());
-                let copy_cmd = "mkdir -p /opt/dure/serv && cp -r /tmp/dure-wasm-main/* /opt/dure/serv/ 2>&1";
+                // Step 3: Copy files to /opt/dure/serv
+                log.push("3. Copying files to /opt/dure/serv...".to_string());
+                let copy_cmd = "mkdir -p /opt/dure/serv && cp -r /tmp/dure-wasm-main/* /opt/dure/serv/";
                 match ssh::execute_ssh_command(&host_config, copy_cmd) {
-                    Ok(output) => log.push(format!("   ✓ Copied files: {}", output.trim())),
+                    Ok(_) => log.push("   ✓ Files copied".to_string()),
                     Err(e) => {
                         log.push(format!("   ✗ Copy failed: {}", e));
                         return Err(format!("Copy failed: {}", e));
                     }
                 }
 
-                // Step 6: Run dure wss server
-                log.push(format!("6. Starting dure server for domain '{}'...", domain));
-                let run_cmd = format!("cd /opt/dure && nohup ./dure wss server {} > /var/log/dure-server.log 2>&1 &", domain);
+                // Step 4: Cleanup
+                log.push("4. Cleaning up...".to_string());
+                let cleanup_cmd = "rm -rf /tmp/dure-wasm-main";
+                match ssh::execute_ssh_command(&host_config, cleanup_cmd) {
+                    Ok(_) => log.push("   ✓ Cleaned up temp files".to_string()),
+                    Err(e) => {
+                        log.push(format!("   ⚠ Cleanup warning: {}", e));
+                    }
+                }
+
+                // Step 5: Start dure server
+                log.push(format!("5. Starting dure server for domain '{}'...", domain));
+                let run_cmd = format!("chmod +x /opt/dure/dure && cd /opt/dure && nohup ./dure wss server {} > /var/log/dure-server.log 2>&1 &", domain);
                 match ssh::execute_ssh_command(&host_config, &run_cmd) {
-                    Ok(output) => log.push(format!("   ✓ Server started: {}", output.trim())),
+                    Ok(_) => log.push("   ✓ Server started".to_string()),
                     Err(e) => {
                         log.push(format!("   ✗ Server start failed: {}", e));
                         return Err(format!("Server start failed: {}", e));
@@ -1242,71 +1238,86 @@ impl SshTab {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(promise) = &self.install_server_promise {
             if let Some(result) = promise.ready() {
-                self.install_server_result = Some(result.clone());
+                match result {
+                    Ok(progress_log) => {
+                        self.install_progress_log.extend(progress_log.clone());
+                    }
+                    Err(e) => {
+                        self.install_progress_log.push(format!("✗ Installation failed: {}", e));
+                    }
+                }
                 self.install_server_promise = None;
-                self.install_server_in_progress = false;
+                // Keep install_server_in_progress = true so user can see final logs and click Close
             }
         }
     }
 
-    fn render_install_server_result(
-        &mut self,
-        ctx: &egui::Context,
-        result: &Result<Vec<String>, String>,
-    ) {
+    fn render_install_progress(&mut self, ctx: &egui::Context) {
+        eprintln!("📊 Rendering install progress, log lines: {}", self.install_progress_log.len());
         let mut open = true;
 
-        egui::Window::new("Install Dure Server Result")
+        egui::Window::new("Dure Server Installation")
             .open(&mut open)
             .resizable(true)
-            .default_width(600.0)
-            .default_height(400.0)
+            .default_width(700.0)
+            .default_height(500.0)
             .collapsible(false)
             .show(ctx, |ui| {
-                match result {
-                    Ok(log) => {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("✓").color(egui::Color32::GREEN).size(20.0));
-                            ui.label(egui::RichText::new("Installation completed").strong());
-                        });
-                        ui.add_space(8.0);
-
-                        egui::ScrollArea::vertical()
-                            .id_salt("install_server_log_scroll")
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                for line in log {
-                                    if line.starts_with("   ✓") {
-                                        ui.colored_label(egui::Color32::GREEN, line);
-                                    } else if line.starts_with("   ✗") {
-                                        ui.colored_label(egui::Color32::RED, line);
-                                    } else if line.starts_with("   ⚠") {
-                                        ui.colored_label(egui::Color32::YELLOW, line);
-                                    } else {
-                                        ui.label(line);
-                                    }
-                                }
-                            });
-                    }
-                    Err(err) => {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("✗").color(egui::Color32::RED).size(20.0));
-                            ui.label(egui::RichText::new("Installation failed").strong());
-                        });
-                        ui.add_space(8.0);
-                        ui.colored_label(egui::Color32::RED, err);
-                    }
+                if let Some(host) = &self.install_server_host {
+                    ui.label(egui::RichText::new(format!("Host: {}", host)).strong());
+                    ui.add_space(8.0);
                 }
+
+                // Show spinner if still in progress
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.install_server_promise.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Installation in progress...");
+                    });
+                    ui.add_space(8.0);
+                }
+
+                egui::ScrollArea::vertical()
+                    .id_salt("install_progress_scroll")
+                    .max_height(350.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for line in &self.install_progress_log {
+                            if line.starts_with("   ✓") || line.starts_with("✓") {
+                                ui.colored_label(egui::Color32::GREEN, line);
+                            } else if line.starts_with("   ✗") || line.starts_with("✗") {
+                                ui.colored_label(egui::Color32::RED, line);
+                            } else if line.starts_with("   ⚠") || line.starts_with("⚠") {
+                                ui.colored_label(egui::Color32::YELLOW, line);
+                            } else {
+                                ui.label(line);
+                            }
+                        }
+                    });
 
                 ui.add_space(12.0);
 
-                if ui.button("Close").clicked() {
-                    self.install_server_result = None;
+                let can_close = self.install_server_promise.is_none();
+                if ui.add_enabled(can_close, egui::Button::new("Close")).clicked() {
+                    self.install_server_in_progress = false;
+                    self.install_server_host = None;
+                    self.install_progress_log.clear();
+                }
+
+                if !can_close {
+                    ui.colored_label(
+                        egui::Color32::GRAY,
+                        "Please wait for installation to complete",
+                    );
                 }
             });
 
         if !open {
-            self.install_server_result = None;
+            self.install_server_in_progress = false;
+            self.install_server_host = None;
+            self.install_progress_log.clear();
         }
     }
+
 }
