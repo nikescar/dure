@@ -158,6 +158,9 @@ pub struct SshHostConfig {
     /// SSH port (default: 22)
     #[serde(default = "default_ssh_port")]
     pub port: u16,
+    /// Associated domain name
+    #[serde(default)]
+    pub domain: Option<String>,
     /// Initialization status
     #[serde(default)]
     pub initialized: bool,
@@ -178,6 +181,7 @@ impl Default for SshHostConfig {
             private_key_path: None,
             keyring_domain: None,
             port: default_ssh_port(),
+            domain: None,
             initialized: false,
             last_status: None,
         }

@@ -12,8 +12,8 @@ use egui_material3::MaterialButton;
 use poll_promise::Promise;
 use serde::{Deserialize, Serialize};
 
-use crate::api::gcp_oauth::{OAuthHandler, OAuthResult};
-use crate::calc::gcp::{Instance, MachineType, Region, get_common_machine_types};
+use crate::api::gcp_oauth::{OAuthHandler, OAuthResult, refresh_access_token};
+use crate::calc::gcp::{Instance, MachineType, Region, get_common_machine_types, get_region_location};
 use crate::calc::gcp_rest::{GcpRestClient, InstanceRequest, Metadata, MetadataItem};
 use crate::calc::keyring;
 use crate::config::{AppConfig, CloudPlatformConfig};
@@ -374,19 +374,42 @@ impl GcpWizard {
                 if let Some(platform) = self.available_platforms.iter().find(|p| {
                     p.gcp_connected_email.as_ref() == Some(&self.selected_platform_email)
                 }) {
-                    if let (Some(access_token), Some(refresh_token)) = (
+                    if let (Some(access_token), Some(refresh_token), Some(expiry)) = (
                         &platform.gcp_oauth_access_token,
                         &platform.gcp_oauth_refresh_token,
+                        platform.gcp_oauth_token_expiry,
                     ) {
-                        self.oauth_result = Some(OAuthResult {
-                            access_token: access_token.clone(),
-                            refresh_token: refresh_token.clone(),
-                            expires_at: platform
-                                .gcp_oauth_token_expiry
-                                .map(|exp| exp as u64)
-                                .unwrap_or(chrono::Utc::now().timestamp() as u64 + 3600),
-                        });
-                        self.state = WizardState::SelectProject;
+                        // Check if stored token has expired
+                        let now = chrono::Utc::now().timestamp();
+
+                        if now < expiry {
+                            // Token is still valid
+                            self.oauth_result = Some(OAuthResult {
+                                access_token: access_token.clone(),
+                                refresh_token: refresh_token.clone(),
+                                expires_at: expiry as u64,
+                            });
+                            self.state = WizardState::SelectProject;
+                        } else {
+                            // Token has expired - try to refresh it
+                            log::info!("Stored OAuth token has expired. Attempting to refresh...");
+                            let handler = OAuthHandler::default();
+                            match refresh_access_token(
+                                &handler.client_id(),
+                                &handler.client_secret(),
+                                refresh_token,
+                            ) {
+                                Ok(new_oauth_result) => {
+                                    log::info!("Successfully refreshed OAuth token");
+                                    self.oauth_result = Some(new_oauth_result);
+                                    self.state = WizardState::SelectProject;
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to refresh token: {}", e);
+                                    // oauth_result stays None, user will need to re-authenticate
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -970,7 +993,10 @@ impl GcpWizard {
                             match client.list_billing_accounts() {
                                 Ok(list) => {
                                     if let Some(ba) = list.billing_accounts.first() {
-                                        // Extract billing account ID from name (e.g., "billingAccounts/012345-ABCDEF-678901" -> "012345-ABCDEF-678901")
+                                        // Use display name (e.g., "DURE") instead of account ID
+                                        let display_name = ba.display_name.clone();
+
+                                        // Extract billing account ID from name for logging
                                         let account_id = ba.name
                                             .strip_prefix("billingAccounts/")
                                             .unwrap_or(&ba.name)
@@ -978,10 +1004,10 @@ impl GcpWizard {
 
                                         self.progress_log.push(format!(
                                             "✓ Found billing account: {} ({})",
-                                            ba.display_name,
+                                            display_name,
                                             account_id
                                         ));
-                                        Some(account_id)
+                                        Some(display_name)
                                     } else {
                                         self.progress_log.push("⚠ No billing accounts found".to_string());
                                         None
@@ -1028,6 +1054,7 @@ impl GcpWizard {
                                 private_key_path: None,
                                 keyring_domain: Some(ssh_key_name.clone()),
                                 port: 22,
+                                domain: None,
                                 initialized: true,
                                 last_status: None,
                             };
@@ -1227,6 +1254,19 @@ impl GcpWizard {
 
     fn load_regions(&mut self) {
         if let Some(oauth) = &self.oauth_result {
+            // Check if token has expired
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            if now >= oauth.expires_at {
+                self.progress_log.push(
+                    "⚠ OAuth token has expired. Please restart the wizard.".to_string()
+                );
+                return;
+            }
+
             let client = GcpRestClient::new(oauth.access_token.clone());
 
             match client.list_regions(&self.selected_project_id) {
@@ -1236,7 +1276,7 @@ impl GcpWizard {
                         .into_iter()
                         .map(|r| Region {
                             name: r.name.clone(),
-                            location: r.description,
+                            location: get_region_location(&r.name),
                             zones: r
                                 .zones
                                 .iter()
@@ -1298,6 +1338,21 @@ impl GcpWizard {
         }
 
         if let Some(oauth) = &self.oauth_result {
+            // Check if token has expired and needs refresh
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            if now >= oauth.expires_at {
+                self.projects_load_error = Some(
+                    "OAuth token has expired. Please restart the wizard and complete it more quickly, \
+                    or enter your project ID manually below.".to_string()
+                );
+                self.projects_loaded = true;
+                return;
+            }
+
             let client = GcpRestClient::new(oauth.access_token.clone());
 
             match client.list_projects(None) {

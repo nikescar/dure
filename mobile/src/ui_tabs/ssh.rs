@@ -12,9 +12,9 @@ use crate::config::{AppConfig, SshHostConfig};
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct SshTab {
     selected_row: Option<usize>,
-    /// Cached SSH host rows (host, port, auth type, status)
+    /// Cached SSH host rows (host, port, domain, auth type, status)
     #[cfg_attr(feature = "serde", serde(skip))]
-    rows: Vec<[String; 4]>,
+    rows: Vec<[String; 5]>,
     #[cfg_attr(feature = "serde", serde(skip))]
     loaded: bool,
     #[cfg_attr(feature = "serde", serde(skip))]
@@ -58,6 +58,24 @@ pub struct SshTab {
     test_promise: Option<poll_promise::Promise<Result<ssh::SshConnectionResult, String>>>,
     #[cfg_attr(feature = "serde", serde(skip))]
     test_result: Option<Result<String, String>>,
+
+    // Domain selection dialog state
+    #[cfg_attr(feature = "serde", serde(skip))]
+    show_domain_dialog: bool,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    available_domains: Vec<String>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    selected_domain_for_edit: Option<String>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    editing_host_index: Option<usize>,
+
+    // Check server state
+    #[cfg_attr(feature = "serde", serde(skip))]
+    check_server_in_progress: bool,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    check_server_promise: Option<poll_promise::Promise<Result<(String, String), String>>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    check_server_result: Option<Result<(String, String), String>>,
 }
 
 impl Default for SshTab {
@@ -66,6 +84,7 @@ impl Default for SshTab {
             let columns = vec![
                 text_column("Host", 250.0),
                 text_column("Port", 80.0),
+                text_column("Domain", 150.0),
                 text_column("Auth", 150.0),
                 text_column("Status", 150.0),
             ];
@@ -105,6 +124,13 @@ impl Default for SshTab {
             test_in_progress: false,
             test_promise: None,
             test_result: None,
+            show_domain_dialog: false,
+            available_domains: Vec::new(),
+            selected_domain_for_edit: None,
+            editing_host_index: None,
+            check_server_in_progress: false,
+            check_server_promise: None,
+            check_server_result: None,
         }
     }
 }
@@ -183,19 +209,35 @@ impl SshTab {
                 }
             }
 
-            // Initialize button - enabled only when a row is selected
-            let init_button = MaterialButton::outlined("Initialize");
-            let init_button = if has_selection && !self.init_in_progress {
-                init_button
+            // Domain button - enabled only when a row is selected
+            let domain_button = MaterialButton::outlined("Domain");
+            let domain_button = if has_selection {
+                domain_button
             } else {
-                init_button.enabled(false)
+                domain_button.enabled(false)
             };
 
-            if ui.add(init_button).clicked() {
+            if ui.add(domain_button).clicked() {
+                if let Some(idx) = selected_row_idx {
+                    if idx < self.rows.len() {
+                        self.show_domain_selection_dialog(idx);
+                    }
+                }
+            }
+
+            // Check Server button - enabled only when a row is selected
+            let check_server_button = MaterialButton::outlined("Check Server");
+            let check_server_button = if has_selection && !self.check_server_in_progress {
+                check_server_button
+            } else {
+                check_server_button.enabled(false)
+            };
+
+            if ui.add(check_server_button).clicked() {
                 if let Some(idx) = selected_row_idx {
                     if idx < self.rows.len() {
                         let host = self.rows[idx][0].clone();
-                        self.execute_init_host(host);
+                        self.execute_check_server(host);
                     }
                 }
             }
@@ -259,6 +301,19 @@ impl SshTab {
         if let Some(result) = self.test_result.clone() {
             self.render_test_result(ui.ctx(), &result);
         }
+
+        // Domain selection dialog
+        if self.show_domain_dialog {
+            self.render_domain_dialog(ui.ctx());
+        }
+
+        // Poll for check server completion
+        self.poll_check_server();
+
+        // Show check server result
+        if let Some(result) = self.check_server_result.clone() {
+            self.render_check_server_result(ui.ctx(), &result);
+        }
     }
 
     fn load_rows(&mut self) {
@@ -286,9 +341,12 @@ impl SshTab {
                             "Not Initialized"
                         };
 
+                        let domain = host_config.domain.as_deref().unwrap_or("-");
+
                         self.rows.push([
                             host_config.host.clone(),
                             host_config.port.to_string(),
+                            domain.to_string(),
                             auth_type.to_string(),
                             status.to_string(),
                         ]);
@@ -296,6 +354,7 @@ impl SshTab {
                         data_rows.push(vec![
                             host_config.host.clone(),
                             host_config.port.to_string(),
+                            domain.to_string(),
                             auth_type.to_string(),
                             status.to_string(),
                         ]);
@@ -307,6 +366,7 @@ impl SshTab {
                         let columns = vec![
                             text_column("Host", 250.0),
                             text_column("Port", 80.0),
+                            text_column("Domain", 150.0),
                             text_column("Auth", 150.0),
                             text_column("Status", 150.0),
                         ];
@@ -452,6 +512,7 @@ impl SshTab {
                         },
                         keyring_domain: None,
                         port,
+                        domain: None,
                         initialized: false,
                         last_status: None,
                     };
@@ -740,6 +801,276 @@ impl SshTab {
                 egui::Color32::GRAY,
                 "Please wait for initialization to complete",
             );
+        }
+    }
+
+    fn show_domain_selection_dialog(&mut self, host_idx: usize) {
+        self.editing_host_index = Some(host_idx);
+        self.show_domain_dialog = true;
+        self.available_domains.clear();
+        self.selected_domain_for_edit = None;
+
+        // Load available domains from ns config
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use crate::calc::ns::NsConfig;
+            if let Ok(ns_config) = NsConfig::load_from_config_file() {
+                // Collect domains from all providers
+                for provider_config in ns_config.providers.values() {
+                    for domain_entry in &provider_config.domains {
+                        self.available_domains.push(domain_entry.domain.clone());
+                    }
+                }
+                // Collect domains from GCP accounts
+                for gcp_account in &ns_config.gcp_accounts {
+                    for domain_entry in &gcp_account.domains {
+                        self.available_domains.push(domain_entry.domain.clone());
+                    }
+                }
+                self.available_domains.sort();
+                self.available_domains.dedup();
+            }
+        }
+
+        // Set current domain if exists
+        if host_idx < self.rows.len() {
+            let current_domain = &self.rows[host_idx][2];
+            if current_domain != "-" {
+                self.selected_domain_for_edit = Some(current_domain.clone());
+            }
+        }
+    }
+
+    fn render_domain_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+
+        egui::Window::new("Select Domain")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label("Select a domain to associate with this SSH host:");
+                ui.add_space(8.0);
+
+                if self.available_domains.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "No domains found. Add domains in the Domains tab first.",
+                    );
+                } else {
+                    // Domain selection combo box
+                    let current_text = self
+                        .selected_domain_for_edit
+                        .as_deref()
+                        .unwrap_or("(Select a domain)");
+
+                    egui::ComboBox::from_id_salt("domain_selection")
+                        .selected_text(current_text)
+                        .show_ui(ui, |ui| {
+                            for domain in &self.available_domains {
+                                ui.selectable_value(
+                                    &mut self.selected_domain_for_edit,
+                                    Some(domain.clone()),
+                                    domain,
+                                );
+                            }
+                        });
+                }
+
+                ui.add_space(12.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.show_domain_dialog = false;
+                        self.editing_host_index = None;
+                        self.selected_domain_for_edit = None;
+                    }
+
+                    if ui.button("Clear").clicked() {
+                        self.execute_set_domain(None);
+                        self.show_domain_dialog = false;
+                    }
+
+                    if ui.button("Set").clicked() {
+                        if let Some(domain) = &self.selected_domain_for_edit {
+                            self.execute_set_domain(Some(domain.clone()));
+                        }
+                        self.show_domain_dialog = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.show_domain_dialog = false;
+            self.editing_host_index = None;
+            self.selected_domain_for_edit = None;
+        }
+    }
+
+    fn execute_set_domain(&mut self, domain: Option<String>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(host_idx) = self.editing_host_index {
+                if host_idx < self.rows.len() {
+                    let host = self.rows[host_idx][0].clone();
+
+                    match load_config() {
+                        Ok((mut app_config, config_path)) => {
+                            // Find and update host
+                            if let Some(host_config) =
+                                app_config.ssh_hosts.iter_mut().find(|h| h.host == host)
+                            {
+                                host_config.domain = domain.clone();
+
+                                // Save config
+                                match app_config.save(&config_path) {
+                                    Ok(_) => {
+                                        eprintln!("✓ SSH host domain updated, refreshing spreadsheet");
+                                        self.loaded = false; // Trigger reload
+                                        self.editing_host_index = None;
+                                        self.selected_domain_for_edit = None;
+                                        self.load_error = None;
+                                    }
+                                    Err(e) => {
+                                        self.load_error = Some(format!("Failed to save config: {e}"));
+                                    }
+                                }
+                            } else {
+                                self.load_error = Some(format!("SSH host '{}' not found", host));
+                            }
+                        }
+                        Err(e) => {
+                            self.load_error = Some(format!("Failed to load config: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn execute_check_server(&mut self, host: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.check_server_in_progress = true;
+            self.check_server_result = None;
+
+            // Load config and get host config
+            let host_config_clone = match load_config() {
+                Ok((app_config, _)) => {
+                    app_config
+                        .ssh_hosts
+                        .iter()
+                        .find(|h| h.host == host)
+                        .cloned()
+                }
+                Err(e) => {
+                    self.check_server_result = Some(Err(format!("Failed to load config: {e}")));
+                    self.check_server_in_progress = false;
+                    return;
+                }
+            };
+
+            let Some(host_config) = host_config_clone else {
+                self.check_server_result = Some(Err(format!("SSH host '{}' not found", host)));
+                self.check_server_in_progress = false;
+                return;
+            };
+
+            // Spawn check server in background thread
+            let promise = poll_promise::Promise::spawn_thread("check_server", move || {
+                // Check nftables
+                let nft_result = ssh::execute_ssh_command(&host_config, "nft list ruleset 2>&1")
+                    .unwrap_or_else(|e| format!("Error checking nftables: {}", e));
+
+                // Check network connections
+                let ss_result = ssh::execute_ssh_command(&host_config, "ss -nltup 2>&1")
+                    .unwrap_or_else(|e| format!("Error checking network connections: {}", e));
+
+                Ok((nft_result, ss_result))
+            });
+
+            self.check_server_promise = Some(promise);
+        }
+    }
+
+    fn poll_check_server(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(promise) = &self.check_server_promise {
+            if let Some(result) = promise.ready() {
+                self.check_server_result = Some(result.clone());
+                self.check_server_promise = None;
+                self.check_server_in_progress = false;
+            }
+        }
+    }
+
+    fn render_check_server_result(
+        &mut self,
+        ctx: &egui::Context,
+        result: &Result<(String, String), String>,
+    ) {
+        let mut open = true;
+
+        egui::Window::new("Server Check Results")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(700.0)
+            .default_height(500.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                match result {
+                    Ok((nft_output, ss_output)) => {
+                        ui.heading("NFTables Status");
+                        ui.add_space(8.0);
+
+                        egui::ScrollArea::vertical()
+                            .id_salt("check_server_nft_scroll")
+                            .max_height(200.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut nft_output.as_str())
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(12.0);
+
+                        ui.heading("Network Connections (ss -nltup)");
+                        ui.add_space(8.0);
+
+                        egui::ScrollArea::vertical()
+                            .id_salt("check_server_ss_scroll")
+                            .max_height(200.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut ss_output.as_str())
+                                        .code_editor()
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
+                    }
+                    Err(err) => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("✗").color(egui::Color32::RED).size(20.0));
+                            ui.label(egui::RichText::new("Check failed").strong());
+                        });
+                        ui.add_space(8.0);
+                        ui.colored_label(egui::Color32::RED, err);
+                    }
+                }
+
+                ui.add_space(12.0);
+
+                if ui.button("Close").clicked() {
+                    self.check_server_result = None;
+                }
+            });
+
+        if !open {
+            self.check_server_result = None;
         }
     }
 }

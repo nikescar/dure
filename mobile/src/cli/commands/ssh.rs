@@ -135,6 +135,7 @@ pub fn execute_ssh_add(
         private_key_path,
         keyring_domain: None,
         port,
+        domain: None,
         initialized: false,
         last_status: None,
     };

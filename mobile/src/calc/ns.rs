@@ -206,6 +206,32 @@ impl NsConfig {
         })
     }
 
+    /// Load NS config from config file
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    pub fn load_from_config_file() -> Result<Self> {
+        let proj_dirs = directories::ProjectDirs::from("pe", "nikescar", "dure")
+            .ok_or_else(|| anyhow::anyhow!("Failed to get project directories"))?;
+        let config_path = proj_dirs.config_dir().join("config.yml");
+
+        if !config_path.exists() {
+            return Ok(NsConfig::default());
+        }
+
+        let yaml = std::fs::read_to_string(&config_path)
+            .context("Failed to read config")?;
+
+        #[derive(serde::Deserialize)]
+        struct FullConfig {
+            #[serde(default)]
+            ns: NsConfig,
+        }
+
+        match serde_yaml::from_str::<FullConfig>(&yaml) {
+            Ok(full_config) => Ok(full_config.ns),
+            Err(_) => Ok(NsConfig::default()),
+        }
+    }
+
     /// Save to YAML string
     pub fn to_yaml(&self) -> Result<String> {
         let mut providers_map = serde_yaml::Mapping::new();

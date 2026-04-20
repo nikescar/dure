@@ -438,7 +438,7 @@ impl PlatformTab {
 
                                 data_rows.push(vec![
                                     platform_display.clone(),
-                                    vm.name.clone(),
+                                    format!("{}({})", vm.name, vm.instance_id),
                                     details,
                                     vm.status.clone(),
                                 ]);

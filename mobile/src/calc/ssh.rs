@@ -87,6 +87,58 @@ pub fn execute_command(host_config: &SshHostConfig, command: &str) -> Result<Str
     Ok(output)
 }
 
+/// Execute SSH command on remote host (returns output even on non-zero exit code)
+pub fn execute_ssh_command(host_config: &SshHostConfig, command: &str) -> Result<String> {
+    let (username, hostname) = parse_ssh_host(&host_config.host)?;
+    let addr = format!("{}:{}", hostname, host_config.port);
+
+    // Connect to TCP stream with 15 second timeout
+    let timeout = Duration::from_secs(15);
+    let socket_addr = addr.to_socket_addrs()
+        .context(format!("Failed to resolve address: {}", addr))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("No address found for {}", addr))?;
+
+    let tcp = TcpStream::connect_timeout(&socket_addr, timeout)
+        .context(format!("Failed to connect to {} (timeout: 15s)", addr))?;
+
+    // Create SSH session
+    let mut sess = Session::new()?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()?;
+
+    // Authenticate
+    authenticate(&mut sess, &username, host_config)?;
+
+    // Execute command
+    let mut channel = sess.channel_session()?;
+    channel.exec(command)?;
+
+    let mut output = String::new();
+    channel.read_to_string(&mut output)?;
+
+    // Also read stderr
+    let mut stderr = String::new();
+    channel.stderr().read_to_string(&mut stderr)?;
+
+    channel.wait_close()?;
+    let exit_status = channel.exit_status()?;
+
+    // Combine stdout and stderr
+    let combined_output = if !stderr.is_empty() {
+        format!("{}\n{}", output, stderr)
+    } else {
+        output
+    };
+
+    // Return output even if exit status is non-zero
+    if exit_status != 0 {
+        Ok(format!("Exit code {}\n{}", exit_status, combined_output))
+    } else {
+        Ok(combined_output)
+    }
+}
+
 /// Initialize SSH host with required software
 pub fn initialize_host(host_config: &SshHostConfig) -> Result<Vec<String>> {
     let mut progress_log = Vec::new();

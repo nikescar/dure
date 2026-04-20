@@ -297,6 +297,64 @@ pub struct MachineType {
     pub memory_mb: i64,
 }
 
+/// Get friendly location name for a GCP region
+pub fn get_region_location(region_name: &str) -> String {
+    match region_name {
+        // Americas
+        "northamerica-northeast1" => "Montréal, Canada",
+        "northamerica-northeast2" => "Toronto, Canada",
+        "southamerica-east1" => "São Paulo, Brazil",
+        "southamerica-west1" => "Santiago, Chile",
+        "us-central1" => "Iowa, USA",
+        "us-east1" => "South Carolina, USA",
+        "us-east4" => "Virginia, USA",
+        "us-east5" => "Columbus, USA",
+        "us-south1" => "Dallas, USA",
+        "us-west1" => "Oregon, USA",
+        "us-west2" => "Los Angeles, USA",
+        "us-west3" => "Salt Lake City, USA",
+        "us-west4" => "Las Vegas, USA",
+
+        // Europe
+        "europe-central2" => "Warsaw, Poland",
+        "europe-north1" => "Finland",
+        "europe-southwest1" => "Madrid, Spain",
+        "europe-west1" => "Belgium",
+        "europe-west2" => "London, UK",
+        "europe-west3" => "Frankfurt, Germany",
+        "europe-west4" => "Netherlands",
+        "europe-west6" => "Zürich, Switzerland",
+        "europe-west8" => "Milan, Italy",
+        "europe-west9" => "Paris, France",
+        "europe-west10" => "Berlin, Germany",
+        "europe-west12" => "Turin, Italy",
+
+        // Asia Pacific
+        "asia-east1" => "Taiwan",
+        "asia-east2" => "Hong Kong",
+        "asia-northeast1" => "Tokyo, Japan",
+        "asia-northeast2" => "Osaka, Japan",
+        "asia-northeast3" => "Seoul, South Korea",
+        "asia-south1" => "Mumbai, India",
+        "asia-south2" => "Delhi, India",
+        "asia-southeast1" => "Singapore",
+        "asia-southeast2" => "Jakarta, Indonesia",
+        "australia-southeast1" => "Sydney, Australia",
+        "australia-southeast2" => "Melbourne, Australia",
+
+        // Middle East
+        "me-central1" => "Doha, Qatar",
+        "me-west1" => "Tel Aviv, Israel",
+
+        // Africa
+        "africa-south1" => "Johannesburg, South Africa",
+
+        // Default: return the region name as-is
+        _ => region_name,
+    }
+    .to_string()
+}
+
 /// Get common machine types
 pub fn get_common_machine_types() -> Vec<MachineType> {
     vec![
