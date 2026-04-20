@@ -90,7 +90,13 @@ pub fn android_main(app: AndroidApp) {
             use egui_material3::*;
 
             // Setup theme from file FIRST (before fonts)
-            setup_local_theme(Some("resources/material-theme-lightblue.json"));
+            // Try multiple possible paths for the theme file
+            let theme_paths = [
+                "mobile/resources/material-theme-lightblue.json",  // From workspace root
+                "resources/material-theme-lightblue.json",          // From mobile dir
+            ];
+            let theme_path = theme_paths.iter().find(|p| std::path::Path::new(p).exists());
+            setup_local_theme(theme_path.map(|s| *s));
 
             // Prepare local fonts including Material Symbols (using include_bytes!)
             // setup_local_fonts_from_bytes(

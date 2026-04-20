@@ -146,7 +146,7 @@ impl Config {
             let cache_dir = proj_dirs.cache_dir().to_path_buf();
 
             let tmp_dir = cache_dir.join("tmp");
-            let data_dir = cache_dir.join("data");
+            let data_dir = config_dir.clone();
 
             // Create directories if they don't exist
             fs::create_dir_all(&config_dir)?;

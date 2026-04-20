@@ -488,6 +488,13 @@ pub fn run_with_args(args: RunArgs) -> io::Result<()> {
         download_static,
     } = args;
 
+    // Ensure database directory exists
+    if let Some(parent) = std::path::Path::new(&db_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| io::Error::other(format!("Failed to create database directory: {}", e)))?;
+        log::info!("Database directory ready: {:?}", parent);
+    }
+
     // Write PID file so `wss status` can detect this in-process server.
     let pid = std::process::id();
     let started_at = SystemTime::now()

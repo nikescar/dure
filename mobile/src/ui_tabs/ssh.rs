@@ -1211,9 +1211,20 @@ impl SshTab {
                     }
                 }
 
-                // Step 5: Start dure-wss server
-                log.push(format!("5. Starting dure-wss server for domain '{}'...", domain));
-                let run_cmd = format!("chmod +x /opt/dure/dure-wss && cd /opt/dure && nohup ./dure-wss wss server {} > /var/log/dure-server.log 2>&1 &", domain);
+                // Step 5: Prepare database directory
+                log.push("5. Preparing database directory...".to_string());
+                let prepare_db_cmd = "mkdir -p /root/.local/share/dure";
+                match ssh::execute_ssh_command(&host_config, prepare_db_cmd) {
+                    Ok(_) => log.push("   ✓ Database directory ready".to_string()),
+                    Err(e) => {
+                        log.push(format!("   ✗ Database directory creation failed: {}", e));
+                        return Err(format!("Database directory creation failed: {}", e));
+                    }
+                }
+
+                // Step 6: Start dure-wss server
+                log.push(format!("6. Starting dure-wss server for domain '{}'...", domain));
+                let run_cmd = format!("chmod +x /opt/dure/dure-wss && cd /opt/dure && setsid nohup ./dure-wss server {} > /var/log/dure-server.log 2>&1 < /dev/null &", domain);
                 match ssh::execute_ssh_command(&host_config, &run_cmd) {
                     Ok(_) => log.push("   ✓ Server started".to_string()),
                     Err(e) => {
@@ -1253,8 +1264,13 @@ impl SshTab {
     }
 
     fn render_install_progress(&mut self, ctx: &egui::Context) {
-        eprintln!("📊 Rendering install progress, log lines: {}", self.install_progress_log.len());
         let mut open = true;
+
+        // Only request repaint if installation is in progress
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.install_server_promise.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
 
         egui::Window::new("Dure Server Installation")
             .open(&mut open)
