@@ -1179,11 +1179,11 @@ impl SshTab {
                     }
                 }
 
-                // Step 2: Extract dure.tar.gz to /opt/dure
-                log.push("2. Extracting dure.tar.gz to /opt/dure...".to_string());
-                let extract_tar_cmd = "mkdir -p /opt/dure && tar -xzf /tmp/dure-wasm-main/dure.tar.gz -C /opt/dure";
+                // Step 2: Extract dure-wss.tar.gz to /opt/dure
+                log.push("2. Extracting dure-wss.tar.gz to /opt/dure...".to_string());
+                let extract_tar_cmd = "mkdir -p /opt/dure && tar -xzf /tmp/dure-wasm-main/dure-wss.tar.gz -C /opt/dure";
                 match ssh::execute_ssh_command(&host_config, extract_tar_cmd) {
-                    Ok(_) => log.push("   ✓ Extracted dure binary".to_string()),
+                    Ok(_) => log.push("   ✓ Extracted dure-wss binary".to_string()),
                     Err(e) => {
                         log.push(format!("   ✗ Extract failed: {}", e));
                         return Err(format!("Extract failed: {}", e));
@@ -1211,9 +1211,9 @@ impl SshTab {
                     }
                 }
 
-                // Step 5: Start dure server
-                log.push(format!("5. Starting dure server for domain '{}'...", domain));
-                let run_cmd = format!("chmod +x /opt/dure/dure && cd /opt/dure && nohup ./dure wss server {} > /var/log/dure-server.log 2>&1 &", domain);
+                // Step 5: Start dure-wss server
+                log.push(format!("5. Starting dure-wss server for domain '{}'...", domain));
+                let run_cmd = format!("chmod +x /opt/dure/dure-wss && cd /opt/dure && nohup ./dure-wss wss server {} > /var/log/dure-server.log 2>&1 &", domain);
                 match ssh::execute_ssh_command(&host_config, &run_cmd) {
                     Ok(_) => log.push("   ✓ Server started".to_string()),
                     Err(e) => {
@@ -1223,7 +1223,7 @@ impl SshTab {
                 }
 
                 log.push("".to_string());
-                log.push("✓ Dure server installation complete!".to_string());
+                log.push("✓ Dure-wss server installation complete!".to_string());
                 log.push(format!("  Server logs: /var/log/dure-server.log"));
                 log.push(format!("  Domain: {}", domain));
 

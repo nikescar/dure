@@ -1,0 +1,81 @@
+[package]
+name = "dure-wss"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "dure-wss"
+path = "src/main.rs"
+
+[lib]
+name = "dure_wss"
+path = "src/lib.rs"
+
+[dependencies]
+# Depend on main dure library for shared code
+# Note: We enable only necessary features, excluding GUI dependencies
+dure = { path = "../../mobile", default-features = false, features = ["serde"] }
+
+# Core dependencies
+log = { version = "0.4", default-features = false }
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", features = ["std"] }
+
+# CLI
+clap = { version = "4.6", features = ["derive"] }
+
+# Async runtime (asupersync) - WSS specific
+asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", features = ["tls", "tls-native-roots"] }
+futures = "0.3"
+
+# WebSocket support - WSS specific
+async-tungstenite = { git = "https://github.com/nikescar/async-tungstenite", features = ["asupersync-runtime"] }
+
+# TLS/Certificate handling - WSS specific
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+rustls-native-certs = "0.8"
+rcgen = "0.13"
+
+# HTTP/URL parsing
+url = "2.5"
+urlencoding = "2.1"
+
+# WebAuthn support - WSS specific
+webauthn-rs = { version = "0.5.0", features = ["danger-allow-state-serialisation"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Database ORM
+diesel = { version = "2.3", features = ["sqlite", "chrono", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.3"
+libsqlite3-hotbundle = { git = "https://github.com/nikescar/libsqlite3-hotbundle" }
+
+# OpenAPI / Swagger UI - WSS specific
+utoipa = { version = "5.4.0", features = ["macros"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["vendored"] }
+
+# AsyncAPI documentation - WSS specific
+asyncapi-rust = "0.2"
+schemars = { version = "1.2", features = ["derive", "chrono04"] }
+serde_yaml = "0.9"
+
+# Utilities
+directories = "5.0"
+dotenvy = "0.15"
+env_logger = { version = "0.11", default-features = false }
+dashmap = "6.1"
+base64 = "0.22"
+
+# Static file server (darkhttpd) - WSS specific
+darkhttpd-sys = { path = "../darkhttpd-sys" }
+
+# WebAuthn FFI (go-webauthn) - WSS specific
+go-webauthn = { path = "../go-webauthn" }
+pollster = "0.4"
+
+[lints]
+workspace = true
