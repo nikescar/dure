@@ -1164,9 +1164,29 @@ impl SshTab {
                 }
             };
 
+            // Load local config to get DNS provider settings
+            let (app_config, _) = match load_config() {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    self.install_progress_log.push(format!("✗ Failed to load local config: {}", e));
+                    self.install_server_in_progress = false;
+                    return;
+                }
+            };
+
             // Spawn install server in background thread
             let promise = poll_promise::Promise::spawn_thread("install_server", move || {
                 let mut log = Vec::new();
+
+                // Step 0: Stop any existing dure-wss processes
+                log.push("0. Stopping existing dure-wss processes...".to_string());
+                let kill_cmd = "pkill -f dure-wss || true";
+                match ssh::execute_ssh_command(&host_config, kill_cmd) {
+                    Ok(_) => log.push("   ✓ Stopped existing processes".to_string()),
+                    Err(e) => {
+                        log.push(format!("   ⚠ Warning: {}", e));
+                    }
+                }
 
                 // Step 1: Download and extract GitHub tar.gz
                 log.push("1. Downloading dure-wasm from GitHub...".to_string());
@@ -1201,8 +1221,8 @@ impl SshTab {
                     }
                 }
 
-                // Step 4: Cleanup
-                log.push("4. Cleaning up...".to_string());
+                // Step 4: Cleanup download temp files
+                log.push("4. Cleaning up download temp files...".to_string());
                 let cleanup_cmd = "rm -rf /tmp/dure-wasm-main";
                 match ssh::execute_ssh_command(&host_config, cleanup_cmd) {
                     Ok(_) => log.push("   ✓ Cleaned up temp files".to_string()),
@@ -1211,32 +1231,242 @@ impl SshTab {
                     }
                 }
 
-                // Step 5: Prepare database directory
-                log.push("5. Preparing database directory...".to_string());
-                let prepare_db_cmd = "mkdir -p /root/.local/share/dure";
-                match ssh::execute_ssh_command(&host_config, prepare_db_cmd) {
-                    Ok(_) => log.push("   ✓ Database directory ready".to_string()),
+                // Step 5: Create config directories
+                log.push("5. Creating configuration directories...".to_string());
+                let prepare_dirs_cmd = "mkdir -p /root/.config/dure && mkdir -p /root/.local/share/dure";
+                match ssh::execute_ssh_command(&host_config, prepare_dirs_cmd) {
+                    Ok(_) => log.push("   ✓ Directories created".to_string()),
                     Err(e) => {
-                        log.push(format!("   ✗ Database directory creation failed: {}", e));
-                        return Err(format!("Database directory creation failed: {}", e));
+                        log.push(format!("   ✗ Directory creation failed: {}", e));
+                        return Err(format!("Directory creation failed: {}", e));
                     }
                 }
 
-                // Step 6: Start dure-wss server
-                log.push(format!("6. Starting dure-wss server for domain '{}'...", domain));
-                let run_cmd = format!("chmod +x /opt/dure/dure-wss && cd /opt/dure && setsid nohup ./dure-wss server {} > /var/log/dure-server.log 2>&1 < /dev/null &", domain);
-                match ssh::execute_ssh_command(&host_config, &run_cmd) {
-                    Ok(_) => log.push("   ✓ Server started".to_string()),
+                // Step 6: Create config.yml with DNS provider settings
+                log.push("6. Creating server configuration...".to_string());
+
+                // Build config YAML content - only include configured DNS provider
+                let dns_provider = &app_config.domain.dns_provider;
+                let mut config_yaml = format!(
+                    "domain:\n  name: \"{}\"\n  dns_provider: \"{}\"\n",
+                    domain, dns_provider
+                );
+
+                // Add cert section if email is configured
+                if let Some(email) = &app_config.domain.cert.email {
+                    config_yaml.push_str(&format!(
+                        "  cert:\n    email: \"{}\"\n    lego_tos_accepted: true\n",
+                        email
+                    ));
+                }
+
+                // Add DNS provider credentials based on provider type
+                match dns_provider.to_lowercase().as_str() {
+                    "cloudflare" => {
+                        if let Some(token) = &app_config.domain.cloudflare.api_token {
+                            config_yaml.push_str("  cloudflare:\n");
+                            config_yaml.push_str(&format!("    api_token: \"{}\"\n", token));
+                        } else if let (Some(email), Some(key)) = (
+                            &app_config.domain.cloudflare.email,
+                            &app_config.domain.cloudflare.api_key,
+                        ) {
+                            config_yaml.push_str("  cloudflare:\n");
+                            config_yaml.push_str(&format!("    email: \"{}\"\n", email));
+                            config_yaml.push_str(&format!("    api_key: \"{}\"\n", key));
+                        }
+                    }
+                    "duckdns" => {
+                        if let Some(token) = &app_config.domain.duckdns.token {
+                            config_yaml.push_str("  duckdns:\n");
+                            config_yaml.push_str(&format!("    token: \"{}\"\n", token));
+                        }
+                    }
+                    "gcloud" => {
+                        config_yaml.push_str("  gcloud:\n");
+                        if let Some(project) = &app_config.domain.gcloud.project {
+                            config_yaml.push_str(&format!("    project: \"{}\"\n", project));
+                        }
+                        if let Some(sa_file) = &app_config.domain.gcloud.service_account_file {
+                            config_yaml.push_str(&format!("    service_account_file: \"{}\"\n", sa_file));
+                        }
+                    }
+                    "porkbun" => {
+                        if let (Some(api_key), Some(secret)) = (
+                            &app_config.domain.porkbun.api_key,
+                            &app_config.domain.porkbun.secret_api_key,
+                        ) {
+                            config_yaml.push_str("  porkbun:\n");
+                            config_yaml.push_str(&format!("    api_key: \"{}\"\n", api_key));
+                            config_yaml.push_str(&format!("    secret_api_key: \"{}\"\n", secret));
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Add server configuration
+                config_yaml.push_str("server:\n");
+                config_yaml.push_str("  use_tls: true\n");
+                config_yaml.push_str("  debug_http: false\n");
+
+                // Write config to remote server
+                let write_config_cmd = format!(
+                    "cat > /root/.config/dure/config.yml << 'EOFCONFIG'\n{}\nEOFCONFIG",
+                    config_yaml
+                );
+                match ssh::execute_ssh_command(&host_config, &write_config_cmd) {
+                    Ok(_) => {
+                        log.push("   ✓ Configuration written".to_string());
+                        // Verify the config was written
+                        match ssh::execute_ssh_command(&host_config, "cat /root/.config/dure/config.yml") {
+                            Ok(content) => {
+                                log.push(format!("   ✓ Config verified ({} bytes)", content.len()));
+                            }
+                            Err(e) => {
+                                log.push(format!("   ⚠ Cannot verify config: {}", e));
+                            }
+                        }
+                    }
                     Err(e) => {
-                        log.push(format!("   ✗ Server start failed: {}", e));
-                        return Err(format!("Server start failed: {}", e));
+                        log.push(format!("   ✗ Config write failed: {}", e));
+                        return Err(format!("Config write failed: {}", e));
+                    }
+                }
+
+                // Step 7: Start dure-wss server as daemon
+                log.push(format!("7. Starting dure-wss server for domain '{}'...", domain));
+
+                // Make the binary executable
+                match ssh::execute_ssh_command(&host_config, "chmod +x /opt/dure/dure-wss") {
+                    Ok(_) => log.push("   ✓ Binary permissions set".to_string()),
+                    Err(e) => {
+                        log.push(format!("   ✗ chmod failed: {}", e));
+                        return Err(format!("chmod failed: {}", e));
+                    }
+                }
+
+                // Create a launcher script that properly daemonizes the process
+                let launcher_script = format!(
+                    r#"#!/bin/bash
+cd /opt/dure || exit 1
+nohup ./dure-wss server {} > /var/log/dure-server.log 2>&1 < /dev/null &
+exit 0
+"#,
+                    domain
+                );
+
+                let create_launcher_cmd = format!(
+                    "cat > /tmp/start-dure-daemon.sh << 'EOFLAUNCHER'\n{}\nEOFLAUNCHER && chmod +x /tmp/start-dure-daemon.sh",
+                    launcher_script
+                );
+
+                match ssh::execute_ssh_command(&host_config, &create_launcher_cmd) {
+                    Ok(_) => log.push("   ✓ Launcher script created".to_string()),
+                    Err(e) => {
+                        log.push(format!("   ✗ Launcher creation failed: {}", e));
+                        return Err(format!("Launcher creation failed: {}", e));
+                    }
+                }
+
+                // Use 'at now' to run the launcher script detached from SSH session
+                // This is the most reliable way to detach a daemon via SSH
+                let start_cmd = "echo '/tmp/start-dure-daemon.sh' | at now 2>&1";
+                match ssh::execute_ssh_command(&host_config, start_cmd) {
+                    Ok(output) => {
+                        log.push("   ✓ Server daemon queued".to_string());
+                        if !output.trim().is_empty() && !output.contains("warning") {
+                            log.push(format!("   Output: {}", output.trim()));
+                        }
+                    }
+                    Err(e) => {
+                        // Fallback: try screen if at command is not available
+                        log.push(format!("   ⚠ 'at' command failed: {}", e));
+                        log.push("   ✓ Trying screen fallback...".to_string());
+
+                        let screen_cmd = format!(
+                            "screen -dmS dure-wss bash -c 'cd /opt/dure && ./dure-wss server {} > /var/log/dure-server.log 2>&1'",
+                            domain
+                        );
+                        match ssh::execute_ssh_command(&host_config, &screen_cmd) {
+                            Ok(_) => log.push("   ✓ Server started in screen session".to_string()),
+                            Err(e2) => {
+                                log.push(format!("   ✗ Screen fallback failed: {}", e2));
+                                log.push("   ✗ Install 'at' or 'screen' package on server".to_string());
+                                return Err("Cannot start daemon - install 'at' or 'screen'".to_string());
+                            }
+                        }
+                    }
+                }
+
+                // Step 8: Wait for daemon to start and verify
+                log.push("8. Waiting for daemon to start...".to_string());
+                std::thread::sleep(std::time::Duration::from_secs(3));
+
+                let check_cmd = "ps aux | grep dure-wss | grep -v grep";
+                match ssh::execute_ssh_command(&host_config, check_cmd) {
+                    Ok(output) => {
+                        if output.trim().is_empty() {
+                            log.push("   ⚠ Server process not found".to_string());
+                            log.push("   Attempting restart...".to_string());
+
+                            // Restart server directly if at/screen failed
+                            let restart_cmd = format!(
+                                "cd /opt/dure && nohup ./dure-wss server {} > /var/log/dure-server.log 2>&1 < /dev/null &",
+                                domain
+                            );
+                            match ssh::execute_ssh_command(&host_config, &restart_cmd) {
+                                Ok(_) => {
+                                    log.push("   ✓ Server restarted directly".to_string());
+                                    std::thread::sleep(std::time::Duration::from_secs(2));
+                                }
+                                Err(e) => {
+                                    log.push(format!("   ✗ Restart failed: {}", e));
+                                }
+                            }
+                        } else {
+                            log.push("   ✓ Server process is running".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        log.push(format!("   ⚠ Cannot verify server: {}", e));
+                    }
+                }
+
+                // Step 9: Check server logs for errors
+                log.push("9. Checking server logs...".to_string());
+                let logs_cmd = "tail -15 /var/log/dure-server.log";
+                match ssh::execute_ssh_command(&host_config, logs_cmd) {
+                    Ok(logs) => {
+                        if logs.contains("TLS disabled") {
+                            log.push("   ⚠ Server running without TLS".to_string());
+                            log.push("   Config may not be loaded correctly".to_string());
+                        } else if logs.contains("HTTPS/WSS server") || logs.contains("Address:") {
+                            log.push("   ✓ Server started successfully".to_string());
+                        }
+
+                        // Show relevant log lines
+                        for line in logs.lines().take(5) {
+                            if line.contains("✓") || line.contains("⚠") || line.contains("✗")
+                                || line.contains("Domain:") || line.contains("Address:") {
+                                log.push(format!("   {}", line.trim()));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log.push(format!("   ⚠ Cannot read logs: {}", e));
                     }
                 }
 
                 log.push("".to_string());
                 log.push("✓ Dure-wss server installation complete!".to_string());
-                log.push(format!("  Server logs: /var/log/dure-server.log"));
                 log.push(format!("  Domain: {}", domain));
+                log.push(format!("  Config: /root/.config/dure/config.yml"));
+                log.push(format!("  Logs: /var/log/dure-server.log"));
+                log.push("".to_string());
+                log.push("Useful commands:".to_string());
+                log.push("  View logs: tail -f /var/log/dure-server.log".to_string());
+                log.push("  Stop server: pkill -f dure-wss".to_string());
+                log.push("  Restart: pkill -f dure-wss && cd /opt/dure && ./dure-wss server dure.co &".to_string());
+                log.push("  Check config: cat /root/.config/dure/config.yml".to_string());
 
                 Ok(log)
             });
