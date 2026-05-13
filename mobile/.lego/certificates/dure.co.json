@@ -1,0 +1,5 @@
+{
+	"domain": "dure.co",
+	"certUrl": "https://acme-v02.api.letsencrypt.org/acme/cert/061b854932a59bb07503ec6c61fb17061d9d",
+	"certStableUrl": "https://acme-v02.api.letsencrypt.org/acme/cert/061b854932a59bb07503ec6c61fb17061d9d"
+}

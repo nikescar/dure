@@ -1,0 +1,9 @@
+{
+	"email": "nikescar@gmail.com",
+	"registration": {
+		"body": {
+			"status": "valid"
+		},
+		"uri": "https://acme-v02.api.letsencrypt.org/acme/acct/3260173471"
+	}
+}
